@@ -45,6 +45,8 @@ export default function Home() {
   const [vista, setVista] = useState<"lista" | "pipeline">("lista");
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
+  const [mensajeManual, setMensajeManual] = useState("");
+  const [enviando, setEnviando] = useState(false);
 
   async function login() {
     setCargando(true);
@@ -75,6 +77,22 @@ export default function Home() {
     const res = await fetch(`${SOFIA_URL}/api/conversaciones/${telefono}?x_password=${password}`);
     const data = await res.json();
     setHistorial(data.mensajes);
+  }
+
+  async function enviarMensaje() {
+    if (!seleccionada || !mensajeManual.trim()) return;
+    setEnviando(true);
+    try {
+      await fetch(`${SOFIA_URL}/api/conversaciones/${seleccionada}/enviar?x_password=${password}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mensaje: mensajeManual }),
+      });
+      setMensajeManual("");
+      await abrirChat(seleccionada);
+    } finally {
+      setEnviando(false);
+    }
   }
 
   async function cambiarEtapa(telefono: string, etapa: string) {
@@ -201,6 +219,23 @@ export default function Home() {
                         </div>
                       </div>
                     ))}
+                  </div>
+                  <div className="bg-white border-t px-4 py-3 flex gap-2">
+                    <input
+                      type="text"
+                      value={mensajeManual}
+                      onChange={e => setMensajeManual(e.target.value)}
+                      onKeyDown={e => e.key === "Enter" && !e.shiftKey && enviarMensaje()}
+                      placeholder="Escribí un mensaje como Fedra..."
+                      className="flex-1 border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <button
+                      onClick={enviarMensaje}
+                      disabled={enviando || !mensajeManual.trim()}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 transition disabled:opacity-50"
+                    >
+                      {enviando ? "..." : "Enviar"}
+                    </button>
                   </div>
                 </>
               ) : (
