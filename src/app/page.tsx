@@ -117,6 +117,10 @@ export default function Home() {
   const [showNotas, setShowNotas] = useState(false);
   const [notas, setNotas] = useState("");
   const [guardandoNotas, setGuardandoNotas] = useState(false);
+  const [showBusqueda, setShowBusqueda] = useState(false);
+  const [busquedaChat, setBusquedaChat] = useState("");
+  const [busquedaIdx, setBusquedaIdx] = useState(0);
+  const busquedaRef = useRef<HTMLInputElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -368,6 +372,34 @@ export default function Home() {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
   }, [historial]);
 
+  // Índices de mensajes que coinciden con la búsqueda
+  const resultadosBusqueda = busquedaChat.trim().length >= 2
+    ? historial.reduce<number[]>((acc, msg, i) => {
+        if (msg.content.toLowerCase().includes(busquedaChat.toLowerCase())) acc.push(i);
+        return acc;
+      }, [])
+    : [];
+
+  // Scroll al resultado activo
+  useEffect(() => {
+    if (resultadosBusqueda.length === 0) return;
+    const el = document.getElementById(`msg-${resultadosBusqueda[busquedaIdx]}`);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [busquedaIdx, busquedaChat]); // eslint-disable-line
+
+  function abrirBusquedaChat() {
+    setShowBusqueda(true);
+    setBusquedaChat("");
+    setBusquedaIdx(0);
+    setTimeout(() => busquedaRef.current?.focus(), 50);
+  }
+
+  function cerrarBusquedaChat() {
+    setShowBusqueda(false);
+    setBusquedaChat("");
+    setBusquedaIdx(0);
+  }
+
   const convFiltradas = conversaciones.filter(c => {
     const n = getDisplayName(c.nombre, c.telefono).toLowerCase();
     return n.includes(busqueda.toLowerCase()) || c.telefono.includes(busqueda);
@@ -412,13 +444,19 @@ export default function Home() {
     const esSticker = content.startsWith("[Sticker");
     const isHovered = msgHover === i;
     const isEditing = editandoIdx === i;
+    const isBusquedaMatch = busquedaChat.trim().length >= 2 && content.toLowerCase().includes(busquedaChat.toLowerCase());
+    const isBusquedaActivo = isBusquedaMatch && resultadosBusqueda[busquedaIdx] === i;
 
     return (
       <div
         key={i}
+        id={`msg-${i}`}
         className={`flex ${esUser ? "justify-start" : "justify-end"} group`}
         onMouseEnter={() => setMsgHover(i)}
         onMouseLeave={() => { setMsgHover(null); setShowReactions(null); }}
+        style={isBusquedaActivo ? { backgroundColor: "#fef08a", borderRadius: "12px", margin: "2px -4px", padding: "0 4px" }
+              : isBusquedaMatch ? { backgroundColor: "#fefce8", borderRadius: "12px", margin: "2px -4px", padding: "0 4px" }
+              : {}}
       >
         <div className={`flex items-end gap-2 max-w-xs lg:max-w-md ${esUser ? "flex-row" : "flex-row-reverse"}`}>
 
@@ -807,6 +845,13 @@ export default function Home() {
                           </span>
                         )}
                         {/* Toggle Sofia */}
+                        {/* Buscar en el chat */}
+                        <button
+                          onClick={abrirBusquedaChat}
+                          className="px-3 py-1.5 rounded-xl text-xs font-bold bg-gray-100 text-gray-500 hover:bg-gray-200 transition"
+                          title="Buscar en el chat"
+                        >🔍</button>
+
                         {/* Notas privadas */}
                         <button
                           onClick={() => setShowNotas(!showNotas)}
@@ -843,6 +888,41 @@ export default function Home() {
                       <p className="text-xs text-gray-500 mt-2 bg-gray-50 rounded-lg px-3 py-1.5 italic">💡 {convSeleccionada.resumen}</p>
                     )}
                   </div>
+
+                  {/* Barra de búsqueda */}
+                  {showBusqueda && (
+                    <div className="bg-white border-b border-gray-100 px-4 py-2 flex items-center gap-2">
+                      <span className="text-gray-400 text-sm">🔍</span>
+                      <input
+                        ref={busquedaRef}
+                        value={busquedaChat}
+                        onChange={e => { setBusquedaChat(e.target.value); setBusquedaIdx(0); }}
+                        onKeyDown={e => {
+                          if (e.key === "Escape") cerrarBusquedaChat();
+                          if (e.key === "Enter" && resultadosBusqueda.length > 0)
+                            setBusquedaIdx(i => (i + 1) % resultadosBusqueda.length);
+                        }}
+                        placeholder="Buscar en la conversación..."
+                        className="flex-1 text-sm focus:outline-none"
+                      />
+                      {busquedaChat.trim().length >= 2 && (
+                        <span className="text-xs text-gray-400 flex-shrink-0">
+                          {resultadosBusqueda.length === 0
+                            ? "Sin resultados"
+                            : `${busquedaIdx + 1} / ${resultadosBusqueda.length}`}
+                        </span>
+                      )}
+                      {resultadosBusqueda.length > 1 && (
+                        <>
+                          <button onClick={() => setBusquedaIdx(i => (i - 1 + resultadosBusqueda.length) % resultadosBusqueda.length)}
+                            className="w-6 h-6 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs flex items-center justify-center">↑</button>
+                          <button onClick={() => setBusquedaIdx(i => (i + 1) % resultadosBusqueda.length)}
+                            className="w-6 h-6 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs flex items-center justify-center">↓</button>
+                        </>
+                      )}
+                      <button onClick={cerrarBusquedaChat} className="text-gray-400 hover:text-gray-600 text-sm ml-1">✕</button>
+                    </div>
+                  )}
 
                   {/* Contenedor mensajes + notas */}
                   <div className="flex flex-1 overflow-hidden">
