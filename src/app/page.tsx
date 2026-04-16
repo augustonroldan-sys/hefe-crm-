@@ -565,7 +565,7 @@ export default function Home() {
                     {/* Column body */}
                     <div
                       className={`rounded-b-xl p-2 space-y-2 flex-1 min-h-40 transition-colors ${isDragTarget ? "bg-gray-200 ring-2 ring-offset-1" : "bg-gray-100"}`}
-                      style={isDragTarget ? { ringColor: PRIMARY } : {}}
+                      style={isDragTarget ? { outline: `2px solid ${PRIMARY}` } : {}}
                     >
                       {contactos.map(conv => {
                         const score = calcularScore(conv);
