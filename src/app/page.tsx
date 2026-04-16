@@ -264,7 +264,21 @@ export default function Home() {
   function renderMensaje(msg: Mensaje, i: number) {
     const esUser = msg.role === "user";
     const content = msg.content;
+
+    // Mensajes de sistema/acción — mostrar como texto pequeño centrado
+    const esSistema = /^\[.{1,30}\]$/.test(content.trim());
+    if (esSistema) {
+      return (
+        <div key={i} className="flex justify-center">
+          <span className="text-xs text-gray-400 bg-gray-100 px-3 py-1 rounded-full">{content}</span>
+        </div>
+      );
+    }
+
+    // Documento con URL: [Documento: nombre](url)
     const docMatch = content.match(/^\[Documento: (.+?)\]\((.+?)\)$/);
+    // Documento sin URL: [Documento: nombre]
+    const docNoUrlMatch = !docMatch ? content.match(/^\[Documento: (.+?)\]$/) : null;
     const esImagen = content.startsWith("[Imagen");
     const esAudio = content.startsWith("[Audio");
     const esVideo = content.startsWith("[Video");
@@ -314,6 +328,11 @@ export default function Home() {
                     <span className="font-medium">{docMatch[1]}</span>
                     <span className="text-xs opacity-70">↗</span>
                   </a>
+                ) : docNoUrlMatch ? (
+                  <span className="flex items-center gap-2">
+                    <span className="text-lg">📄</span>
+                    <span className="font-medium">{docNoUrlMatch[1]}</span>
+                  </span>
                 ) : esImagen ? (
                   <span className="flex items-center gap-1">🖼️ {content.replace(/\[Imagen\]?:?\s?/g,"").replace("]","").trim()||"Imagen"}</span>
                 ) : esAudio ? (
