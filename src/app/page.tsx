@@ -114,6 +114,9 @@ export default function Home() {
   const [showReactions, setShowReactions] = useState<number|null>(null);
   const [editandoIdx, setEditandoIdx] = useState<number|null>(null);
   const [editTexto, setEditTexto] = useState("");
+  const [showNotas, setShowNotas] = useState(false);
+  const [notas, setNotas] = useState("");
+  const [guardandoNotas, setGuardandoNotas] = useState(false);
   const chatRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -218,10 +221,26 @@ export default function Home() {
 
   async function abrirChat(telefono: string) {
     setSeleccionada(telefono);
-    setReplyTo(null); setArchivoPreview(null); setShowEmoji(false);
-    const res = await fetch(`${SOFIA_URL}/api/conversaciones/${telefono}?x_password=${password}`);
-    const data = await res.json();
-    setHistorial(data.mensajes || []);
+    setReplyTo(null); setArchivoPreview(null); setShowEmoji(false); setShowNotas(false);
+    const [chatRes, notasRes] = await Promise.all([
+      fetch(`${SOFIA_URL}/api/conversaciones/${telefono}?x_password=${password}`),
+      fetch(`${SOFIA_URL}/api/conversaciones/${telefono}/notas?x_password=${password}`),
+    ]);
+    const chatData = await chatRes.json();
+    const notasData = await notasRes.json();
+    setHistorial(chatData.mensajes || []);
+    setNotas(notasData.notas || "");
+  }
+
+  async function guardarNotasChat() {
+    if (!seleccionada) return;
+    setGuardandoNotas(true);
+    await fetch(`${SOFIA_URL}/api/conversaciones/${seleccionada}/notas?x_password=${password}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notas }),
+    });
+    setGuardandoNotas(false);
   }
 
   async function enviarMensaje() {
@@ -788,6 +807,19 @@ export default function Home() {
                           </span>
                         )}
                         {/* Toggle Sofia */}
+                        {/* Notas privadas */}
+                        <button
+                          onClick={() => setShowNotas(!showNotas)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition"
+                          style={showNotas
+                            ? { backgroundColor: "#fef9c3", color: "#ca8a04" }
+                            : { backgroundColor: "#f3f4f6", color: "#6b7280" }
+                          }
+                          title="Notas privadas"
+                        >
+                          📝 {notas ? "Notas ●" : "Notas"}
+                        </button>
+
                         <button
                           onClick={() => toggleSofia(seleccionada, !convSeleccionada.derivada)}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition"
@@ -812,6 +844,9 @@ export default function Home() {
                     )}
                   </div>
 
+                  {/* Contenedor mensajes + notas */}
+                  <div className="flex flex-1 overflow-hidden">
+
                   {/* Messages */}
                   <div ref={chatRef} className="flex-1 overflow-y-auto p-4 space-y-2" style={{backgroundColor:"#f0f4f3"}}>
                     {historial.length === 0
@@ -819,6 +854,38 @@ export default function Home() {
                       : historial.map((msg,i) => renderMensaje(msg,i))
                     }
                   </div>
+
+                  </div>{/* fin messages */}
+
+                  {/* Panel notas */}
+                  {showNotas && (
+                    <div className="w-64 flex-shrink-0 border-l border-gray-100 bg-white flex flex-col">
+                      <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+                        <span className="text-xs font-bold text-gray-700">📝 Notas privadas</span>
+                        <button onClick={() => setShowNotas(false)} className="text-gray-400 hover:text-gray-600 text-base">✕</button>
+                      </div>
+                      <textarea
+                        value={notas}
+                        onChange={e => setNotas(e.target.value)}
+                        placeholder="Escribí notas internas sobre este cliente...&#10;&#10;El cliente no ve esto."
+                        className="flex-1 resize-none p-4 text-xs text-gray-700 focus:outline-none"
+                        style={{ lineHeight: "1.6" }}
+                      />
+                      <div className="px-4 py-3 border-t border-gray-100">
+                        <button
+                          onClick={guardarNotasChat}
+                          disabled={guardandoNotas}
+                          className="w-full py-2 rounded-xl text-xs font-bold text-white transition hover:opacity-90 disabled:opacity-50"
+                          style={{ backgroundColor: PRIMARY }}
+                        >
+                          {guardandoNotas ? "Guardando..." : "Guardar notas"}
+                        </button>
+                        <p className="text-xs text-gray-400 mt-1.5 text-center">Solo visible para vos</p>
+                      </div>
+                    </div>
+                  )}
+
+                  </div>{/* fin contenedor mensajes+notas */}
 
                   {/* Input area */}
                   <div className="bg-white border-t border-gray-100">
