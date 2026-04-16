@@ -1181,8 +1181,6 @@ export default function Home() {
                     }
                   </div>
 
-                  </div>{/* fin messages */}
-
                   {/* Panel notas */}
                   {showNotas && (
                     <div className="w-64 flex-shrink-0 border-l border-gray-100 bg-white flex flex-col">
