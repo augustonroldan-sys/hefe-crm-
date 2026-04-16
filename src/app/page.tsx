@@ -85,7 +85,12 @@ function exportarCSV(conversaciones: Conversacion[]) {
 interface Conversacion {
   telefono: string; nombre: string; etapa: string; derivada: boolean;
   cobro_pendiente: boolean; monto_cobro: string; resumen: string;
-  contacto_existente: boolean; actualizado: string; ultimo_mensaje: string; ultimo_rol: string;
+  contacto_existente: boolean; archivada: boolean; actualizado: string; ultimo_mensaje: string; ultimo_rol: string;
+}
+interface StatsSofia {
+  total_mensajes_sofia: number; total_mensajes_clientes: number;
+  conversaciones_con_respuesta: number; total_conversaciones: number;
+  tasa_respuesta: number; mensajes_por_dia: { fecha: string; sofia: number; clientes: number }[];
 }
 interface Mensaje {
   role: string; content: string; message_id: string;
@@ -139,6 +144,10 @@ export default function Home() {
   const [showBusqueda, setShowBusqueda] = useState(false);
   const [busquedaChat, setBusquedaChat] = useState("");
   const [busquedaIdx, setBusquedaIdx] = useState(0);
+  const [generandoResumen, setGenerandoResumen] = useState(false);
+  const [mostrarArchivadas, setMostrarArchivadas] = useState(false);
+  const [statsSofia, setStatsSofia] = useState<StatsSofia | null>(null);
+  const [resyncVozCorriendo, setResyncVozCorriendo] = useState(false);
   const busquedaRef = useRef<HTMLInputElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -159,7 +168,7 @@ export default function Home() {
   async function login() {
     setCargando(true); setError("");
     try {
-      const res = await fetch(`${SOFIA_URL}/api/conversaciones?x_password=${password}`);
+      const res = await fetch(`${SOFIA_URL}/api/conversaciones?x_password=${password}&incluir_archivadas=false`);
       if (res.status === 401) { setError("Contraseña incorrecta"); setCargando(false); return; }
       setConversaciones(await res.json());
       setAutenticado(true);
@@ -241,7 +250,8 @@ export default function Home() {
 
   const cargarConversaciones = useCallback(async () => {
     try {
-      const res = await fetch(`${SOFIA_URL}/api/conversaciones?x_password=${password}`);
+      const url = `${SOFIA_URL}/api/conversaciones?x_password=${password}&incluir_archivadas=${mostrarArchivadas}`;
+      const res = await fetch(url);
       const data: Conversacion[] = await res.json();
       setConversaciones(data);
 
@@ -282,7 +292,7 @@ export default function Home() {
         setUnreadCount(c => c + nuevos);
       }
     } catch {}
-  }, [password]);
+  }, [password, mostrarArchivadas]);
 
   async function abrirChat(telefono: string) {
     setSeleccionada(telefono);
@@ -355,6 +365,47 @@ export default function Home() {
     await abrirChat(seleccionada);
   }
 
+  async function generarResumenIA() {
+    if (!seleccionada) return;
+    setGenerandoResumen(true);
+    try {
+      const res = await fetch(`${SOFIA_URL}/api/conversaciones/${seleccionada}/resumen?x_password=${password}`, { method: "POST" });
+      const data = await res.json();
+      if (data.resumen) {
+        setConversaciones(prev => prev.map(c => c.telefono === seleccionada ? { ...c, resumen: data.resumen } : c));
+      }
+    } finally { setGenerandoResumen(false); }
+  }
+
+  async function archivarChat(telefono: string, archivar: boolean) {
+    const endpoint = archivar ? "archivar" : "desarchivar";
+    await fetch(`${SOFIA_URL}/api/conversaciones/${telefono}/${endpoint}?x_password=${password}`, { method: "POST" });
+    setConversaciones(prev => prev.map(c => c.telefono === telefono ? { ...c, archivada: archivar } : c));
+    if (archivar && seleccionada === telefono) setSeleccionada(null);
+  }
+
+  async function cargarStatsSofia() {
+    try {
+      const res = await fetch(`${SOFIA_URL}/api/stats/sofia?x_password=${password}`);
+      setStatsSofia(await res.json());
+    } catch {}
+  }
+
+  async function resyncAudios() {
+    setResyncVozCorriendo(true);
+    try {
+      await fetch(`${SOFIA_URL}/resync-audios?x_password=${password}`, { method: "POST" });
+      let done = false;
+      for (let i = 0; i < 30 && !done; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        const r = await fetch(`${SOFIA_URL}/resync-audios/estado?x_password=${password}`);
+        const d = await r.json();
+        if (!d.corriendo) done = true;
+      }
+      if (seleccionada) await abrirChat(seleccionada);
+    } finally { setResyncVozCorriendo(false); }
+  }
+
   async function cambiarEtapa(telefono: string, etapa: string) {
     await fetch(`${SOFIA_URL}/api/conversaciones/${telefono}/etapa?x_password=${password}&etapa=${etapa}`, { method: "PUT" });
     setConversaciones(prev => prev.map(c => c.telefono === telefono ? { ...c, etapa } : c));
@@ -402,9 +453,7 @@ export default function Home() {
   useEffect(() => {
     if (autenticado) {
       cargarConfig();
-      // Inicializar el mapa de últimos mensajes con el estado actual
       conversaciones.forEach(c => prevUltimosMsgs.current.set(c.telefono, c.ultimo_mensaje || ""));
-      // Pedir permiso de notificaciones
       if ("Notification" in window) {
         Notification.requestPermission().then(p => { notifPermission.current = p === "granted"; });
       }
@@ -412,6 +461,10 @@ export default function Home() {
       return () => clearInterval(iv);
     }
   }, [autenticado, cargarConversaciones]);
+
+  useEffect(() => {
+    if (autenticado && vista === "dashboard") cargarStatsSofia();
+  }, [autenticado, vista]); // eslint-disable-line
 
   // Badge en el título de la pestaña
   useEffect(() => {
@@ -901,6 +954,11 @@ export default function Home() {
             style={{backgroundColor:PRIMARY_LIGHT,color:PRIMARY}}>
             {sincronizando ? "⟳ Sync..." : "⟳ Sync"}
           </button>
+          <button onClick={resyncAudios} disabled={resyncVozCorriendo}
+            className="px-3 py-2 rounded-lg text-xs font-semibold bg-gray-100 text-gray-600 hover:bg-gray-200 transition disabled:opacity-50"
+            title="Re-sincronizar audios viejos [voz]">
+            {resyncVozCorriendo ? "🔊 ..." : "🔊 Fix audios"}
+          </button>
           <button onClick={()=>setShowConfig(true)}
             className="px-3 py-2 rounded-lg text-xs font-semibold bg-gray-100 text-gray-600 hover:bg-gray-200 transition">
             ⚙️
@@ -943,7 +1001,15 @@ export default function Home() {
                     {ETAPAS.map(e => <option key={e} value={e}>{ETAPA_LABELS[e]}</option>)}
                   </select>
                 </div>
-                <p className="text-xs text-gray-400 mt-1.5 px-1">{convFiltradas.length} conversaciones</p>
+                <div className="flex items-center justify-between mt-1.5 px-1">
+                  <p className="text-xs text-gray-400">{convFiltradas.length} conversaciones</p>
+                  <button
+                    onClick={() => { setMostrarArchivadas(v => !v); cargarConversaciones(); }}
+                    className="text-xs font-medium transition"
+                    style={{ color: mostrarArchivadas ? PRIMARY : "#9ca3af" }}
+                    title={mostrarArchivadas ? "Ocultar archivadas" : "Mostrar archivadas"}
+                  >{mostrarArchivadas ? "📂 Archivadas" : "📦 Archivadas"}</button>
+                </div>
               </div>
               <div className="overflow-y-auto flex-1">
                 {convFiltradas.map(conv => {
@@ -1006,7 +1072,25 @@ export default function Home() {
                             💰 {convSeleccionada.monto_cobro||"Cobro pendiente"}
                           </span>
                         )}
-                        {/* Toggle Sofia */}
+                        {/* Resumen IA */}
+                        <button
+                          onClick={generarResumenIA}
+                          disabled={generandoResumen}
+                          className="px-3 py-1.5 rounded-xl text-xs font-bold bg-gray-100 text-gray-500 hover:bg-gray-200 transition disabled:opacity-50"
+                          title="Generar resumen IA"
+                        >{generandoResumen ? "✨ ..." : "✨ Resumir"}</button>
+
+                        {/* Archivar */}
+                        <button
+                          onClick={() => archivarChat(seleccionada!, !convSeleccionada.archivada)}
+                          className="px-3 py-1.5 rounded-xl text-xs font-bold transition"
+                          style={convSeleccionada.archivada
+                            ? { backgroundColor: "#f3f4f6", color: "#6b7280" }
+                            : { backgroundColor: "#f3f4f6", color: "#6b7280" }
+                          }
+                          title={convSeleccionada.archivada ? "Desarchivar" : "Archivar conversación"}
+                        >{convSeleccionada.archivada ? "📂 Desarchivar" : "📦 Archivar"}</button>
+
                         {/* Buscar en el chat */}
                         <button
                           onClick={abrirBusquedaChat}
@@ -1390,6 +1474,53 @@ export default function Home() {
                 })}
               </div>
             </div>
+            {/* Estadísticas de Sofia */}
+            {statsSofia && (
+              <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100 mb-6">
+                <h3 className="font-bold text-gray-800 text-sm mb-4">🤖 Estadísticas de Sofia</h3>
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+                  {[
+                    { label: "Mensajes enviados", value: statsSofia.total_mensajes_sofia, icon: "💬", color: PRIMARY },
+                    { label: "Mensajes recibidos", value: statsSofia.total_mensajes_clientes, icon: "📩", color: "#6366f1" },
+                    { label: "Convs. respondidas", value: statsSofia.conversaciones_con_respuesta, icon: "✅", color: "#10b981" },
+                    { label: "Tasa de respuesta", value: `${statsSofia.tasa_respuesta}%`, icon: "📊", color: "#f59e0b" },
+                  ].map(k => (
+                    <div key={k.label} className="bg-gray-50 rounded-xl p-3 text-center">
+                      <p className="text-lg mb-0.5">{k.icon}</p>
+                      <p className="text-xl font-black" style={{ color: k.color }}>{k.value}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">{k.label}</p>
+                    </div>
+                  ))}
+                </div>
+                {/* Mensajes por día — últimos 7 días */}
+                <p className="text-xs font-semibold text-gray-500 mb-2">Actividad últimos 7 días</p>
+                <div className="flex items-end gap-1.5 h-20">
+                  {statsSofia.mensajes_por_dia.map(d => {
+                    const total = d.sofia + d.clientes;
+                    const maxTotal = Math.max(...statsSofia.mensajes_por_dia.map(x => x.sofia + x.clientes), 1);
+                    const pct = Math.round((total / maxTotal) * 100);
+                    const label = d.fecha.slice(5); // MM-DD
+                    return (
+                      <div key={d.fecha} className="flex-1 flex flex-col items-center gap-0.5">
+                        <span className="text-xs text-gray-400">{total > 0 ? total : ""}</span>
+                        <div className="w-full rounded-t-lg overflow-hidden flex flex-col" style={{ height: `${Math.max(pct, 4)}%` }}>
+                          <div className="flex-1" style={{ backgroundColor: PRIMARY, opacity: 0.85 }} title={`Sofia: ${d.sofia}`} />
+                        </div>
+                        <span className="text-xs text-gray-400" style={{ fontSize: "9px" }}>{label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex items-center gap-3 mt-2">
+                  <span className="flex items-center gap-1 text-xs text-gray-500">
+                    <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: PRIMARY }}/>
+                    Sofia
+                  </span>
+                  <button onClick={cargarStatsSofia} className="ml-auto text-xs text-gray-400 hover:text-gray-600">↻ Actualizar</button>
+                </div>
+              </div>
+            )}
+
             {stats.cobroPendiente>0&&(
               <div className="bg-red-50 rounded-2xl p-5 shadow-sm border border-red-100">
                 <h3 className="font-bold text-red-700 text-sm mb-4">💰 Cobros pendientes ({stats.cobroPendiente})</h3>
