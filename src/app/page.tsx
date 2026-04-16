@@ -106,6 +106,7 @@ export default function Home() {
   const [nuevaPlantillaTitulo, setNuevaPlantillaTitulo] = useState("");
   const [nuevaPlantillaTexto, setNuevaPlantillaTexto] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
+  const [mostrarPassword, setMostrarPassword] = useState(false);
   // Chat features
   const [showEmoji, setShowEmoji] = useState(false);
   const [replyTo, setReplyTo] = useState<Mensaje|null>(null);
@@ -619,9 +620,24 @@ export default function Home() {
             <p className="text-sm mt-1" style={{color:PRIMARY}}>Panel de Sofia ✨</p>
           </div>
           <div className="space-y-3">
-            <input type="password" placeholder="Contraseña" value={password}
-              onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()}
-              className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none"/>
+            <div className="relative">
+              <input
+                type={mostrarPassword ? "text" : "password"}
+                placeholder="Contraseña"
+                value={password}
+                onChange={e=>setPassword(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&login()}
+                className="w-full border border-gray-200 rounded-xl px-4 py-3 pr-11 text-sm focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => setMostrarPassword(v => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition text-lg select-none"
+                tabIndex={-1}
+              >
+                {mostrarPassword ? "🙈" : "👁️"}
+              </button>
+            </div>
             {error && <p className="text-red-500 text-sm">{error}</p>}
             <button onClick={login} disabled={cargando}
               className="w-full text-white rounded-xl py-3 font-bold text-sm transition hover:opacity-90 disabled:opacity-50"
