@@ -172,6 +172,8 @@ export default function Home() {
       if (res.status === 401) { setError("Contraseña incorrecta"); setCargando(false); return; }
       setConversaciones(await res.json());
       setAutenticado(true);
+      // Fix audios viejos automáticamente al entrar (background, sin bloquear)
+      fetch(`${SOFIA_URL}/resync-audios?x_password=${password}`, { method: "POST" }).catch(() => {});
     } catch { setError("No se pudo conectar con el servidor"); }
     finally { setCargando(false); }
   }
