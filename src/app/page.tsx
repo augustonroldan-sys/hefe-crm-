@@ -279,9 +279,13 @@ export default function Home() {
     const docMatch = content.match(/^\[Documento: (.+?)\]\((.+?)\)$/);
     // Documento sin URL: [Documento: nombre]
     const docNoUrlMatch = !docMatch ? content.match(/^\[Documento: (.+?)\]$/) : null;
-    const esImagen = content.startsWith("[Imagen");
+    // Imagen con URL: [Imagen](url) o [Imagen](url) caption
+    const imgMatch = content.match(/^\[Imagen\]\((.+?)\)(.*)?$/);
+    // Video con URL: [Video](url)
+    const vidMatch = content.match(/^\[Video\]\((.+?)\)(.*)?$/);
+    const esImagen = content.startsWith("[Imagen") && !imgMatch;
     const esAudio = content.startsWith("[Audio");
-    const esVideo = content.startsWith("[Video");
+    const esVideo = content.startsWith("[Video") && !vidMatch;
     const esSticker = content.startsWith("[Sticker");
     const isHovered = msgHover === i;
     const isEditing = editandoIdx === i;
@@ -320,7 +324,28 @@ export default function Home() {
                   : { backgroundColor:PRIMARY, color:"white" }
                 }
               >
-                {docMatch ? (
+                {imgMatch ? (
+                  <div className="flex flex-col gap-1">
+                    <a href={imgMatch[1]} target="_blank" rel="noopener noreferrer">
+                      <img src={imgMatch[1]} alt="Imagen"
+                        className="rounded-xl max-w-full object-cover cursor-pointer hover:opacity-90 transition"
+                        style={{maxHeight:"200px", maxWidth:"240px"}}
+                        onError={e => { (e.target as HTMLImageElement).style.display="none"; }}
+                      />
+                    </a>
+                    {imgMatch[2]?.trim() && <span className="text-xs opacity-80">{imgMatch[2].trim()}</span>}
+                  </div>
+                ) : vidMatch ? (
+                  <div className="flex flex-col gap-1">
+                    <a href={vidMatch[1]} target="_blank" rel="noopener noreferrer"
+                      className="flex items-center gap-2 px-2 py-1.5 rounded-xl hover:opacity-80 transition"
+                      style={{backgroundColor: esUser ? "#f3f4f6" : "rgba(255,255,255,0.15)"}}>
+                      <span className="text-2xl">🎥</span>
+                      <span className="text-xs font-medium">Ver video ↗</span>
+                    </a>
+                    {vidMatch[2]?.trim() && <span className="text-xs opacity-80">{vidMatch[2].trim()}</span>}
+                  </div>
+                ) : docMatch ? (
                   <a href={docMatch[2]} target="_blank" rel="noopener noreferrer"
                     className="flex items-center gap-2 hover:underline"
                     style={{color: esUser ? PRIMARY : "white"}}>
