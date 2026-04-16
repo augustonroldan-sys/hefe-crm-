@@ -422,7 +422,7 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-50">
+    <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
 
       {/* HEADER */}
       <header className="bg-white border-b border-gray-100 px-5 py-3 flex items-center justify-between shadow-sm">
