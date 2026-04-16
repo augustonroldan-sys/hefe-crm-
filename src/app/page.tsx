@@ -97,6 +97,8 @@ export default function Home() {
   const [busqueda, setBusqueda] = useState("");
   const [sincronizando, setSincronizando] = useState(false);
   const [dragOver, setDragOver] = useState<string|null>(null);
+  const [showConfig, setShowConfig] = useState(false);
+  const [delayRespuesta, setDelayRespuesta] = useState("normal");
   // Chat features
   const [showEmoji, setShowEmoji] = useState(false);
   const [replyTo, setReplyTo] = useState<Mensaje|null>(null);
@@ -128,6 +130,23 @@ export default function Home() {
       setAutenticado(true);
     } catch { setError("No se pudo conectar con el servidor"); }
     finally { setCargando(false); }
+  }
+
+  async function cargarConfig() {
+    try {
+      const res = await fetch(`${SOFIA_URL}/api/configuracion?x_password=${password}`);
+      const data = await res.json();
+      setDelayRespuesta(data.delay_respuesta || "normal");
+    } catch {}
+  }
+
+  async function guardarConfig(delay: string) {
+    setDelayRespuesta(delay);
+    await fetch(`${SOFIA_URL}/api/configuracion?x_password=${password}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ delay_respuesta: delay }),
+    });
   }
 
   const cargarConversaciones = useCallback(async () => {
@@ -238,6 +257,7 @@ export default function Home() {
 
   useEffect(() => {
     if (autenticado) {
+      cargarConfig();
       const iv = setInterval(cargarConversaciones, 15000);
       return () => clearInterval(iv);
     }
@@ -446,8 +466,63 @@ export default function Home() {
     );
   }
 
+  const DELAY_OPCIONES = [
+    { valor: "inmediata", label: "Inmediata",  rango: "0–1 seg",   desc: "Responde al instante",             color: "#60a5fa" },
+    { valor: "rapida",    label: "Rápida",     rango: "2–4 seg",   desc: "Rápido pero natural",               color: "#34d399" },
+    { valor: "normal",    label: "Normal ✦",   rango: "5–8 seg",   desc: "Recomendado — parece humano",       color: PRIMARY   },
+    { valor: "lenta",     label: "Lenta",      rango: "10–15 seg", desc: "Simula que está escribiendo largo", color: "#a78bfa" },
+  ];
+
   return (
     <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
+
+      {/* MODAL CONFIG */}
+      {showConfig && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{backgroundColor:"rgba(0,0,0,0.4)"}}>
+          <div className="bg-white rounded-3xl shadow-2xl p-6 w-full max-w-sm mx-4">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="font-black text-gray-800 text-base">⚙️ Configuración de Sofia</h2>
+              <button onClick={()=>setShowConfig(false)} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+            </div>
+
+            <div className="mb-2">
+              <p className="text-xs font-bold text-gray-700 mb-3">Velocidad de respuesta</p>
+              <div className="space-y-2">
+                {DELAY_OPCIONES.map(op => (
+                  <button
+                    key={op.valor}
+                    onClick={() => guardarConfig(op.valor)}
+                    className="w-full flex items-center gap-3 p-3 rounded-2xl border-2 transition text-left"
+                    style={delayRespuesta === op.valor
+                      ? { borderColor: op.color, backgroundColor: op.color + "15" }
+                      : { borderColor: "#e5e7eb", backgroundColor: "white" }
+                    }
+                  >
+                    <div className="w-3 h-3 rounded-full flex-shrink-0" style={{backgroundColor: op.color}}/>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-gray-800">{op.label}</span>
+                        <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                          style={{backgroundColor: op.color + "20", color: op.color}}>
+                          {op.rango}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-400 mt-0.5">{op.desc}</p>
+                    </div>
+                    {delayRespuesta === op.valor && (
+                      <span className="text-lg flex-shrink-0" style={{color: op.color}}>✓</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-400 mt-4 text-center">
+              El delay varía aleatoriamente dentro del rango para parecer humano
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* HEADER */}
       <header className="bg-white border-b border-gray-100 px-5 py-3 flex items-center justify-between shadow-sm">
@@ -472,6 +547,10 @@ export default function Home() {
             className="px-3 py-2 rounded-lg text-xs font-semibold transition disabled:opacity-50"
             style={{backgroundColor:PRIMARY_LIGHT,color:PRIMARY}}>
             {sincronizando ? "⟳ Sync..." : "⟳ Sync"}
+          </button>
+          <button onClick={()=>setShowConfig(true)}
+            className="px-3 py-2 rounded-lg text-xs font-semibold bg-gray-100 text-gray-600 hover:bg-gray-200 transition">
+            ⚙️
           </button>
         </div>
       </header>
