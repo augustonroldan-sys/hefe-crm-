@@ -609,7 +609,7 @@ export default function Home() {
                     <audio
                       controls
                       src={`${SOFIA_URL}/api/media/${audioMatch[1]}?x_password=${password}`}
-                      style={{height:"32px", width:"100%", accentColor: esUser ? PRIMARY : "white"}}
+                      style={{height:"32px", width:"100%"}}
                     >
                       Tu navegador no soporta audio
                     </audio>
