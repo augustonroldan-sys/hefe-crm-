@@ -32,6 +32,36 @@ const EMOJIS = [
 
 const QUICK_REACTIONS = ["👍","❤️","😂","😮","😢","😡"];
 
+function getAvatarUrl(telefono: string, password: string): string {
+  return `${SOFIA_URL}/api/avatar/${telefono}?x_password=${password}`;
+}
+
+function Avatar({ conv, size = 9, bg, password }: { conv: Conversacion; size?: number; bg?: string; password: string }) {
+  const s = `w-${size} h-${size}`;
+  const bgColor = bg || "#94a3b8";
+  if (conv.avatar) {
+    return (
+      <img
+        src={getAvatarUrl(conv.telefono, password)}
+        alt={conv.nombre}
+        className={`${s} rounded-full object-cover flex-shrink-0`}
+        onError={e => {
+          const t = e.currentTarget;
+          t.style.display = "none";
+          const next = t.nextElementSibling as HTMLElement;
+          if (next) next.style.display = "flex";
+        }}
+      />
+    );
+  }
+  return (
+    <div className={`${s} rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0`}
+      style={{ backgroundColor: bgColor }}>
+      {getInitial(conv.nombre, conv.telefono)}
+    </div>
+  );
+}
+
 function tiempoRelativo(fecha: string): string {
   if (!fecha) return "";
   const diff = Math.floor((Date.now() - new Date(fecha + "Z").getTime()) / 1000);
@@ -85,7 +115,7 @@ function exportarCSV(conversaciones: Conversacion[]) {
 interface Conversacion {
   telefono: string; nombre: string; etapa: string; derivada: boolean;
   cobro_pendiente: boolean; monto_cobro: string; resumen: string;
-  contacto_existente: boolean; archivada: boolean; actualizado: string; ultimo_mensaje: string; ultimo_rol: string;
+  contacto_existente: boolean; archivada: boolean; avatar: string; actualizado: string; ultimo_mensaje: string; ultimo_rol: string;
 }
 interface StatsSofia {
   total_mensajes_sofia: number; total_mensajes_clientes: number;
@@ -590,10 +620,9 @@ export default function Home() {
 
           {/* Avatar */}
           {esUser ? (
-            <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0 self-end mb-1"
-              style={{backgroundColor:"#94a3b8"}}>
-              {convSeleccionada ? getInitial(convSeleccionada.nombre, convSeleccionada.telefono) : "?"}
-            </div>
+            convSeleccionada
+              ? <Avatar conv={convSeleccionada} size={7} bg="#94a3b8" password={password} />
+              : <div className="w-7 h-7 rounded-full bg-gray-300 flex-shrink-0 self-end mb-1"/>
           ) : (
             <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0 self-end mb-1"
               style={{backgroundColor:PRIMARY}}>
@@ -1024,10 +1053,7 @@ export default function Home() {
                       className="p-3 border-b border-gray-50 cursor-pointer transition hover:bg-gray-50"
                       style={activa ? {backgroundColor:PRIMARY_LIGHT,borderLeft:`3px solid ${PRIMARY}`} : {}}>
                       <div className="flex items-start gap-2.5">
-                        <div className="w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0"
-                          style={{backgroundColor:activa?PRIMARY:"#94a3b8"}}>
-                          {getInitial(conv.nombre,conv.telefono)}
-                        </div>
+                        <Avatar conv={conv} size={9} bg={activa?PRIMARY:"#94a3b8"} password={password} />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between mb-0.5">
                             <span className="font-semibold text-gray-800 text-xs truncate">{nombre}</span>
@@ -1057,9 +1083,7 @@ export default function Home() {
                   <div className="bg-white border-b border-gray-100 px-5 py-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold" style={{backgroundColor:PRIMARY}}>
-                          {getInitial(convSeleccionada.nombre,convSeleccionada.telefono)}
-                        </div>
+                        <Avatar conv={convSeleccionada} size={10} bg={PRIMARY} password={password} />
                         <div>
                           <p className="font-bold text-gray-800 text-sm">{getDisplayName(convSeleccionada.nombre,convSeleccionada.telefono)}</p>
                           <p className="text-xs text-gray-400">{convSeleccionada.telefono}</p>
@@ -1375,9 +1399,7 @@ export default function Home() {
                             className="bg-white rounded-xl p-3 shadow-sm cursor-grab active:cursor-grabbing hover:shadow-md transition select-none"
                             onClick={()=>{setVista("lista");abrirChatConLimpiarBadge(conv.telefono);}}>
                             <div className="flex items-center gap-2 mb-1.5">
-                              <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{backgroundColor:PRIMARY}}>
-                                {getInitial(conv.nombre,conv.telefono)}
-                              </div>
+                              <Avatar conv={conv} size={7} bg={PRIMARY} password={password} />
                               <p className="font-semibold text-xs text-gray-800 truncate flex-1">{getDisplayName(conv.nombre,conv.telefono)}</p>
                               <span className="text-xs">{temp.emoji}</span>
                             </div>
@@ -1456,9 +1478,7 @@ export default function Home() {
                   return(
                     <div key={conv.telefono} className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-gray-50 cursor-pointer transition"
                       onClick={()=>{setVista("lista");abrirChatConLimpiarBadge(conv.telefono);}}>
-                      <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{backgroundColor:PRIMARY}}>
-                        {getInitial(conv.nombre,conv.telefono)}
-                      </div>
+                      <Avatar conv={conv} size={8} bg={PRIMARY} password={password} />
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-semibold text-gray-800 truncate">{getDisplayName(conv.nombre,conv.telefono)}</p>
                         <p className="text-xs text-gray-400">{ETAPA_LABELS[conv.etapa]}</p>
@@ -1528,9 +1548,7 @@ export default function Home() {
                   {conversaciones.filter(c=>c.cobro_pendiente).map(conv=>(
                     <div key={conv.telefono} className="flex items-center gap-3 p-2.5 bg-white rounded-xl cursor-pointer hover:shadow-sm transition"
                       onClick={()=>{setVista("lista");abrirChatConLimpiarBadge(conv.telefono);}}>
-                      <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold" style={{backgroundColor:"#dc2626"}}>
-                        {getInitial(conv.nombre,conv.telefono)}
-                      </div>
+                      <Avatar conv={conv} size={8} bg="#dc2626" password={password} />
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-semibold text-gray-800 truncate">{getDisplayName(conv.nombre,conv.telefono)}</p>
                         <p className="text-xs text-red-500 font-medium">{conv.monto_cobro||"Monto no especificado"}</p>
