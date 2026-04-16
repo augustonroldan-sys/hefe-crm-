@@ -385,8 +385,10 @@ export default function Home() {
     const imgMatch = content.match(/^\[Imagen\]\((.+?)\)(.*)?$/);
     // Video con URL: [Video](url)
     const vidMatch = content.match(/^\[Video\]\((.+?)\)(.*)?$/);
+    // Audio con media_id: [Audio](media_id)
+    const audioMatch = content.match(/^\[Audio\]\((.+?)\)$/);
     const esImagen = content.startsWith("[Imagen") && !imgMatch;
-    const esAudio = content.startsWith("[Audio");
+    const esAudio = content.startsWith("[Audio") && !audioMatch;
     const esVideo = content.startsWith("[Video") && !vidMatch;
     const esSticker = content.startsWith("[Sticker");
     const isHovered = msgHover === i;
@@ -475,6 +477,20 @@ export default function Home() {
                   </span>
                 ) : esImagen ? (
                   <span className="flex items-center gap-1">🖼️ {content.replace(/\[Imagen\]?:?\s?/g,"").replace("]","").trim()||"Imagen"}</span>
+                ) : audioMatch ? (
+                  <div className="flex flex-col gap-1" style={{minWidth:"200px"}}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-base">🎙️</span>
+                      <span className="text-xs font-medium opacity-70">Audio</span>
+                    </div>
+                    <audio
+                      controls
+                      src={`${SOFIA_URL}/api/media/${audioMatch[1]}?x_password=${password}`}
+                      style={{height:"32px", width:"100%", accentColor: esUser ? PRIMARY : "white"}}
+                    >
+                      Tu navegador no soporta audio
+                    </audio>
+                  </div>
                 ) : esAudio ? (
                   <span className="flex items-center gap-1">🎙️ Audio</span>
                 ) : esVideo ? (
