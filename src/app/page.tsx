@@ -32,6 +32,17 @@ const EMOJIS = [
 
 const QUICK_REACTIONS = ["👍","❤️","😂","😮","😢","😡"];
 
+function tiempoRelativo(fecha: string): string {
+  if (!fecha) return "";
+  const diff = Math.floor((Date.now() - new Date(fecha + "Z").getTime()) / 1000);
+  if (diff < 60) return "ahora";
+  if (diff < 3600) return `hace ${Math.floor(diff / 60)} min`;
+  if (diff < 86400) return `hace ${Math.floor(diff / 3600)} h`;
+  if (diff < 172800) return "ayer";
+  if (diff < 604800) return `hace ${Math.floor(diff / 86400)} días`;
+  return new Date(fecha + "Z").toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit" });
+}
+
 function formatTel(tel: string) {
   const digits = tel.replace(/\D/g, "");
   if (digits.length >= 10) return `+${digits.slice(0,2)} ${digits.slice(2,5)} ${digits.slice(5,8)}-${digits.slice(8)}`;
@@ -101,12 +112,19 @@ export default function Home() {
   const [delayRespuesta, setDelayRespuesta] = useState("normal");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [savingPrompt, setSavingPrompt] = useState(false);
+  const [seguimientoActivo, setSeguimientoActivo] = useState(false);
+  const [seguimientoDias, setSeguimientoDias] = useState("2");
+  const [seguimientoMensaje, setSeguimientoMensaje] = useState("");
+  const [savingSeguimiento, setSavingSeguimiento] = useState(false);
+  const [forzandoSeguimiento, setForzandoSeguimiento] = useState(false);
+  const [seguimientoResultado, setSeguimientoResultado] = useState<string|null>(null);
   const [plantillas, setPlantillas] = useState<{id:string;titulo:string;texto:string}[]>([]);
   const [showPlantillas, setShowPlantillas] = useState(false);
   const [nuevaPlantillaTitulo, setNuevaPlantillaTitulo] = useState("");
   const [nuevaPlantillaTexto, setNuevaPlantillaTexto] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
   const [mostrarPassword, setMostrarPassword] = useState(false);
+  const [filtroChat, setFiltroChat] = useState<"todos"|"derivados"|"cobro"|string>("todos");
   // Chat features
   const [showEmoji, setShowEmoji] = useState(false);
   const [replyTo, setReplyTo] = useState<Mensaje|null>(null);
@@ -155,6 +173,9 @@ export default function Home() {
       const data = await res.json();
       setDelayRespuesta(data.delay_respuesta || "normal");
       setSystemPrompt(data.system_prompt || "");
+      setSeguimientoActivo(data.seguimiento_activo === "true");
+      setSeguimientoDias(data.seguimiento_dias || "2");
+      setSeguimientoMensaje(data.seguimiento_mensaje || "Hola! Quería saber si pudiste ver la información que te mandé. ¿Puedo ayudarte con algo más? 😊");
       try { setPlantillas(JSON.parse(data.plantillas || "[]")); } catch {}
     } catch {}
   }
@@ -185,6 +206,33 @@ export default function Home() {
     setSavingPrompt(false);
   }
 
+  async function guardarSeguimiento() {
+    setSavingSeguimiento(true);
+    await guardarConfig({
+      seguimiento_activo: seguimientoActivo ? "true" : "false",
+      seguimiento_dias: seguimientoDias,
+      seguimiento_mensaje: seguimientoMensaje,
+    });
+    setSavingSeguimiento(false);
+  }
+
+  async function forzarSeguimiento() {
+    setForzandoSeguimiento(true);
+    setSeguimientoResultado(null);
+    try {
+      const res = await fetch(`${SOFIA_URL}/seguimiento/forzar?x_password=${password}`, { method: "POST" });
+      const data = await res.json();
+      if (data.status === "desactivado") {
+        setSeguimientoResultado("Activá el seguimiento primero");
+      } else {
+        setSeguimientoResultado(data.enviados === 0 ? "Ningún contacto necesita seguimiento ahora" : `✓ Enviado a ${data.enviados} contacto${data.enviados !== 1 ? "s" : ""}`);
+      }
+    } catch {
+      setSeguimientoResultado("Error al forzar seguimiento");
+    }
+    setForzandoSeguimiento(false);
+  }
+
   async function toggleSofia(telefono: string, pausar: boolean) {
     const endpoint = pausar ? "pausar" : "reactivar";
     await fetch(`${SOFIA_URL}/${endpoint}/${telefono}?x_password=${password}`, { method: "POST" });
@@ -204,6 +252,18 @@ export default function Home() {
         const esNuevoMsgCliente = conv.ultimo_rol === "user" && conv.ultimo_mensaje;
         if (esNuevoMsgCliente && prevMsg !== undefined && prevMsg !== conv.ultimo_mensaje) {
           nuevos++;
+          // Sonido de notificación
+          try {
+            const ctx = new AudioContext();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain); gain.connect(ctx.destination);
+            osc.frequency.setValueAtTime(880, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.15);
+            gain.gain.setValueAtTime(0.3, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+            osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.25);
+          } catch {}
           // Notificación del navegador
           if (notifPermission.current && document.hidden) {
             const nombre = getDisplayName(conv.nombre, conv.telefono);
@@ -403,7 +463,12 @@ export default function Home() {
 
   const convFiltradas = conversaciones.filter(c => {
     const n = getDisplayName(c.nombre, c.telefono).toLowerCase();
-    return n.includes(busqueda.toLowerCase()) || c.telefono.includes(busqueda);
+    const coincideBusqueda = n.includes(busqueda.toLowerCase()) || c.telefono.includes(busqueda);
+    if (!coincideBusqueda) return false;
+    if (filtroChat === "derivados") return c.derivada;
+    if (filtroChat === "cobro") return c.cobro_pendiente;
+    if (filtroChat !== "todos") return c.etapa === filtroChat;
+    return true;
   });
   const convSeleccionada = conversaciones.find(c => c.telefono === seleccionada);
 
@@ -731,6 +796,56 @@ export default function Home() {
                 style={{backgroundColor:PRIMARY}}>+ Agregar plantilla</button>
             </div>
 
+            {/* Seguimiento automático */}
+            <div className="mt-5 pt-5 border-t border-gray-100">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-bold text-gray-700">🔔 Seguimiento automático</p>
+                <button
+                  onClick={() => { setSeguimientoActivo(v => !v); }}
+                  className="relative w-10 h-5 rounded-full transition-colors flex-shrink-0"
+                  style={{ backgroundColor: seguimientoActivo ? PRIMARY : "#d1d5db" }}
+                >
+                  <span className="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all"
+                    style={{ left: seguimientoActivo ? "22px" : "2px" }} />
+                </button>
+              </div>
+              <p className="text-xs text-gray-400 mb-3">Sofia manda un mensaje si el cliente no respondió en X días</p>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs text-gray-600">Después de</span>
+                <input
+                  type="number" min="1" max="14" value={seguimientoDias}
+                  onChange={e => setSeguimientoDias(e.target.value)}
+                  className="w-14 border border-gray-200 rounded-lg px-2 py-1 text-xs text-center focus:outline-none"
+                />
+                <span className="text-xs text-gray-600">días sin respuesta</span>
+              </div>
+              <textarea
+                value={seguimientoMensaje}
+                onChange={e => setSeguimientoMensaje(e.target.value)}
+                rows={3}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-xs focus:outline-none resize-none mb-2"
+                placeholder="Mensaje de seguimiento..."
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={guardarSeguimiento} disabled={savingSeguimiento}
+                  className="flex-1 py-2 rounded-xl text-xs font-bold text-white disabled:opacity-50"
+                  style={{ backgroundColor: PRIMARY }}
+                >
+                  {savingSeguimiento ? "Guardando..." : "Guardar"}
+                </button>
+                <button
+                  onClick={forzarSeguimiento} disabled={forzandoSeguimiento}
+                  className="flex-1 py-2 rounded-xl text-xs font-bold bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-50"
+                >
+                  {forzandoSeguimiento ? "Enviando..." : "▶ Forzar ahora"}
+                </button>
+              </div>
+              {seguimientoResultado && (
+                <p className="text-xs mt-2 text-center font-medium" style={{ color: PRIMARY }}>{seguimientoResultado}</p>
+              )}
+            </div>
+
             {/* System prompt editor */}
             <div className="mt-5 pt-5 border-t border-gray-100">
               <p className="text-xs font-bold text-gray-700 mb-2">Personalidad de Sofia</p>
@@ -797,7 +912,31 @@ export default function Home() {
                 <input type="text" placeholder="Buscar cliente..." value={busqueda}
                   onChange={e=>setBusqueda(e.target.value)}
                   className="w-full bg-gray-50 border border-gray-100 rounded-xl px-3 py-2 text-xs focus:outline-none"/>
-                <p className="text-xs text-gray-400 mt-2 px-1">{convFiltradas.length} conversaciones</p>
+                {/* Filtros rápidos */}
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {[
+                    { key: "todos",     label: "Todos" },
+                    { key: "derivados", label: "⚡ Equipo" },
+                    { key: "cobro",     label: "💰 Cobro" },
+                  ].map(f => (
+                    <button key={f.key} onClick={() => setFiltroChat(f.key)}
+                      className="px-2 py-0.5 rounded-full text-xs font-medium transition"
+                      style={filtroChat === f.key
+                        ? { backgroundColor: PRIMARY, color: "white" }
+                        : { backgroundColor: "#f3f4f6", color: "#6b7280" }
+                      }>
+                      {f.label}
+                    </button>
+                  ))}
+                  <select value={ETAPAS.includes(filtroChat) ? filtroChat : ""}
+                    onChange={e => setFiltroChat(e.target.value || "todos")}
+                    className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 focus:outline-none cursor-pointer"
+                    style={ETAPAS.includes(filtroChat) ? { backgroundColor: PRIMARY, color: "white" } : {}}>
+                    <option value="">Etapa...</option>
+                    {ETAPAS.map(e => <option key={e} value={e}>{ETAPA_LABELS[e]}</option>)}
+                  </select>
+                </div>
+                <p className="text-xs text-gray-400 mt-1.5 px-1">{convFiltradas.length} conversaciones</p>
               </div>
               <div className="overflow-y-auto flex-1">
                 {convFiltradas.map(conv => {
@@ -817,7 +956,7 @@ export default function Home() {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between mb-0.5">
                             <span className="font-semibold text-gray-800 text-xs truncate">{nombre}</span>
-                            <span className="text-xs ml-1" title={temp.label}>{temp.emoji}</span>
+                            <span className="text-xs text-gray-400 flex-shrink-0 ml-1">{tiempoRelativo(conv.actualizado)}</span>
                           </div>
                           <div className="flex items-center gap-1 mb-0.5">
                             <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${ec.bg} ${ec.text}`}>
