@@ -99,6 +99,8 @@ export default function Home() {
   const [dragOver, setDragOver] = useState<string|null>(null);
   const [showConfig, setShowConfig] = useState(false);
   const [delayRespuesta, setDelayRespuesta] = useState("normal");
+  const [systemPrompt, setSystemPrompt] = useState("");
+  const [savingPrompt, setSavingPrompt] = useState(false);
   // Chat features
   const [showEmoji, setShowEmoji] = useState(false);
   const [replyTo, setReplyTo] = useState<Mensaje|null>(null);
@@ -137,16 +139,28 @@ export default function Home() {
       const res = await fetch(`${SOFIA_URL}/api/configuracion?x_password=${password}`);
       const data = await res.json();
       setDelayRespuesta(data.delay_respuesta || "normal");
+      setSystemPrompt(data.system_prompt || "");
     } catch {}
   }
 
-  async function guardarConfig(delay: string) {
-    setDelayRespuesta(delay);
+  async function guardarConfig(patch: Record<string, string>) {
     await fetch(`${SOFIA_URL}/api/configuracion?x_password=${password}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ delay_respuesta: delay }),
+      body: JSON.stringify(patch),
     });
+  }
+
+  async function guardarPrompt() {
+    setSavingPrompt(true);
+    await guardarConfig({ system_prompt: systemPrompt });
+    setSavingPrompt(false);
+  }
+
+  async function toggleSofia(telefono: string, pausar: boolean) {
+    const endpoint = pausar ? "pausar" : "reactivar";
+    await fetch(`${SOFIA_URL}/${endpoint}/${telefono}?x_password=${password}`, { method: "POST" });
+    setConversaciones(prev => prev.map(c => c.telefono === telefono ? { ...c, derivada: pausar } : c));
   }
 
   const cargarConversaciones = useCallback(async () => {
@@ -317,7 +331,20 @@ export default function Home() {
         onMouseEnter={() => setMsgHover(i)}
         onMouseLeave={() => { setMsgHover(null); setShowReactions(null); }}
       >
-        <div className={`flex items-end gap-1.5 max-w-xs lg:max-w-md ${esUser ? "flex-row" : "flex-row-reverse"}`}>
+        <div className={`flex items-end gap-2 max-w-xs lg:max-w-md ${esUser ? "flex-row" : "flex-row-reverse"}`}>
+
+          {/* Avatar */}
+          {esUser ? (
+            <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0 self-end mb-1"
+              style={{backgroundColor:"#94a3b8"}}>
+              {convSeleccionada ? getInitial(convSeleccionada.nombre, convSeleccionada.telefono) : "?"}
+            </div>
+          ) : (
+            <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0 self-end mb-1"
+              style={{backgroundColor:PRIMARY}}>
+              S
+            </div>
+          )}
 
           {/* Bubble */}
           <div className="relative">
@@ -338,10 +365,10 @@ export default function Home() {
               </div>
             ) : (
               <div
-                className="px-4 py-2.5 rounded-2xl text-sm shadow-sm"
+                className="px-4 py-2.5 text-sm shadow-sm"
                 style={esUser
-                  ? { backgroundColor:"white", color:"#1f2937" }
-                  : { backgroundColor:PRIMARY, color:"white" }
+                  ? { backgroundColor:"#f1f5f9", color:"#1e293b", borderRadius:"18px 18px 18px 4px" }
+                  : { backgroundColor:PRIMARY, color:"white", borderRadius:"18px 18px 4px 18px" }
                 }
               >
                 {imgMatch ? (
@@ -491,7 +518,7 @@ export default function Home() {
                 {DELAY_OPCIONES.map(op => (
                   <button
                     key={op.valor}
-                    onClick={() => guardarConfig(op.valor)}
+                    onClick={() => { setDelayRespuesta(op.valor); guardarConfig({ delay_respuesta: op.valor }); }}
                     className="w-full flex items-center gap-3 p-3 rounded-2xl border-2 transition text-left"
                     style={delayRespuesta === op.valor
                       ? { borderColor: op.color, backgroundColor: op.color + "15" }
@@ -517,9 +544,30 @@ export default function Home() {
               </div>
             </div>
 
-            <p className="text-xs text-gray-400 mt-4 text-center">
+            <p className="text-xs text-gray-400 mt-3 text-center">
               El delay varía aleatoriamente dentro del rango para parecer humano
             </p>
+
+            {/* System prompt editor */}
+            <div className="mt-5 pt-5 border-t border-gray-100">
+              <p className="text-xs font-bold text-gray-700 mb-2">Personalidad de Sofia</p>
+              <textarea
+                value={systemPrompt}
+                onChange={e => setSystemPrompt(e.target.value)}
+                rows={6}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-xs focus:outline-none resize-none font-mono"
+                placeholder="Sos Sofia, asistente de HeFe Uniformes..."
+              />
+              <button
+                onClick={guardarPrompt}
+                disabled={savingPrompt}
+                className="w-full mt-2 py-2.5 rounded-xl text-xs font-bold text-white transition hover:opacity-90 disabled:opacity-50"
+                style={{ backgroundColor: PRIMARY }}
+              >
+                {savingPrompt ? "Guardando..." : "Guardar prompt"}
+              </button>
+              <p className="text-xs text-gray-400 mt-1.5 text-center">Sofia usa este texto en cada respuesta</p>
+            </div>
           </div>
         </div>
       )}
@@ -629,6 +677,19 @@ export default function Home() {
                             💰 {convSeleccionada.monto_cobro||"Cobro pendiente"}
                           </span>
                         )}
+                        {/* Toggle Sofia */}
+                        <button
+                          onClick={() => toggleSofia(seleccionada, !convSeleccionada.derivada)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition"
+                          style={convSeleccionada.derivada
+                            ? { backgroundColor:"#fef3c7", color:"#d97706" }
+                            : { backgroundColor:"#dcfce7", color:"#16a34a" }
+                          }
+                          title={convSeleccionada.derivada ? "Sofia pausada — click para reactivar" : "Sofia activa — click para pausar"}
+                        >
+                          <span className={`w-1.5 h-1.5 rounded-full ${convSeleccionada.derivada ? "bg-amber-400" : "bg-green-400 animate-pulse"}`}/>
+                          {convSeleccionada.derivada ? "Sofia pausada" : "Sofia activa"}
+                        </button>
                         <select value={convSeleccionada.etapa||"nuevo"} onChange={e=>cambiarEtapa(seleccionada,e.target.value)}
                           className="border border-gray-200 rounded-xl px-3 py-1.5 text-xs font-semibold focus:outline-none cursor-pointer"
                           style={{color:PRIMARY}}>
