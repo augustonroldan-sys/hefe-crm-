@@ -101,6 +101,11 @@ export default function Home() {
   const [delayRespuesta, setDelayRespuesta] = useState("normal");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [savingPrompt, setSavingPrompt] = useState(false);
+  const [plantillas, setPlantillas] = useState<{id:string;titulo:string;texto:string}[]>([]);
+  const [showPlantillas, setShowPlantillas] = useState(false);
+  const [nuevaPlantillaTitulo, setNuevaPlantillaTitulo] = useState("");
+  const [nuevaPlantillaTexto, setNuevaPlantillaTexto] = useState("");
+  const [unreadCount, setUnreadCount] = useState(0);
   // Chat features
   const [showEmoji, setShowEmoji] = useState(false);
   const [replyTo, setReplyTo] = useState<Mensaje|null>(null);
@@ -112,6 +117,8 @@ export default function Home() {
   const chatRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const prevUltimosMsgs = useRef<Map<string, string>>(new Map());
+  const notifPermission = useRef(false);
   const emojiRef = useRef<HTMLDivElement>(null);
 
   // Cerrar emoji picker al hacer click fuera
@@ -140,7 +147,20 @@ export default function Home() {
       const data = await res.json();
       setDelayRespuesta(data.delay_respuesta || "normal");
       setSystemPrompt(data.system_prompt || "");
+      try { setPlantillas(JSON.parse(data.plantillas || "[]")); } catch {}
     } catch {}
+  }
+
+  async function guardarPlantillas(lista: {id:string;titulo:string;texto:string}[]) {
+    setPlantillas(lista);
+    await guardarConfig({ plantillas: JSON.stringify(lista) });
+  }
+
+  function agregarPlantilla() {
+    if (!nuevaPlantillaTitulo.trim() || !nuevaPlantillaTexto.trim()) return;
+    const nueva = { id: Date.now().toString(), titulo: nuevaPlantillaTitulo.trim(), texto: nuevaPlantillaTexto.trim() };
+    guardarPlantillas([...plantillas, nueva]);
+    setNuevaPlantillaTitulo(""); setNuevaPlantillaTexto("");
   }
 
   async function guardarConfig(patch: Record<string, string>) {
@@ -166,7 +186,33 @@ export default function Home() {
   const cargarConversaciones = useCallback(async () => {
     try {
       const res = await fetch(`${SOFIA_URL}/api/conversaciones?x_password=${password}`);
-      setConversaciones(await res.json());
+      const data: Conversacion[] = await res.json();
+      setConversaciones(data);
+
+      // Detectar mensajes nuevos del cliente para notificaciones
+      let nuevos = 0;
+      for (const conv of data) {
+        const prevMsg = prevUltimosMsgs.current.get(conv.telefono);
+        const esNuevoMsgCliente = conv.ultimo_rol === "user" && conv.ultimo_mensaje;
+        if (esNuevoMsgCliente && prevMsg !== undefined && prevMsg !== conv.ultimo_mensaje) {
+          nuevos++;
+          // Notificación del navegador
+          if (notifPermission.current && document.hidden) {
+            const nombre = getDisplayName(conv.nombre, conv.telefono);
+            new Notification(`💬 ${nombre}`, {
+              body: conv.ultimo_mensaje.slice(0, 100),
+              icon: "/logo.jpg",
+              tag: conv.telefono,
+            });
+          }
+        }
+        prevUltimosMsgs.current.set(conv.telefono, conv.ultimo_mensaje || "");
+      }
+
+      // Actualizar badge en el título de la pestaña
+      if (nuevos > 0) {
+        setUnreadCount(c => c + nuevos);
+      }
     } catch {}
   }, [password]);
 
@@ -272,10 +318,32 @@ export default function Home() {
   useEffect(() => {
     if (autenticado) {
       cargarConfig();
-      const iv = setInterval(cargarConversaciones, 15000);
+      // Inicializar el mapa de últimos mensajes con el estado actual
+      conversaciones.forEach(c => prevUltimosMsgs.current.set(c.telefono, c.ultimo_mensaje || ""));
+      // Pedir permiso de notificaciones
+      if ("Notification" in window) {
+        Notification.requestPermission().then(p => { notifPermission.current = p === "granted"; });
+      }
+      const iv = setInterval(cargarConversaciones, 10000);
       return () => clearInterval(iv);
     }
   }, [autenticado, cargarConversaciones]);
+
+  // Badge en el título de la pestaña
+  useEffect(() => {
+    if (unreadCount > 0) {
+      document.title = `(${unreadCount}) HeFe CRM`;
+    } else {
+      document.title = "HeFe CRM";
+    }
+  }, [unreadCount]);
+
+  // Limpiar badge cuando el usuario abre un chat
+  function abrirChatConLimpiarBadge(telefono: string) {
+    setUnreadCount(0);
+    document.title = "HeFe CRM";
+    abrirChat(telefono);
+  }
 
   useEffect(() => {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
@@ -548,6 +616,32 @@ export default function Home() {
               El delay varía aleatoriamente dentro del rango para parecer humano
             </p>
 
+            {/* Plantillas */}
+            <div className="mt-5 pt-5 border-t border-gray-100">
+              <p className="text-xs font-bold text-gray-700 mb-3">⚡ Plantillas de respuesta rápida</p>
+              <div className="space-y-1.5 mb-3 max-h-36 overflow-y-auto">
+                {plantillas.length === 0 && <p className="text-xs text-gray-400">Sin plantillas todavía</p>}
+                {plantillas.map(p => (
+                  <div key={p.id} className="flex items-center gap-2 p-2 bg-gray-50 rounded-xl">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-gray-700">{p.titulo}</p>
+                      <p className="text-xs text-gray-400 truncate">{p.texto}</p>
+                    </div>
+                    <button onClick={()=>guardarPlantillas(plantillas.filter(x=>x.id!==p.id))}
+                      className="text-red-400 hover:text-red-600 text-sm flex-shrink-0">✕</button>
+                  </div>
+                ))}
+              </div>
+              <input value={nuevaPlantillaTitulo} onChange={e=>setNuevaPlantillaTitulo(e.target.value)}
+                placeholder="Nombre (ej: Presupuesto)" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-xs focus:outline-none mb-1.5"/>
+              <textarea value={nuevaPlantillaTexto} onChange={e=>setNuevaPlantillaTexto(e.target.value)}
+                placeholder="Texto del mensaje..." rows={2}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-xs focus:outline-none resize-none mb-2"/>
+              <button onClick={agregarPlantilla} disabled={!nuevaPlantillaTitulo.trim()||!nuevaPlantillaTexto.trim()}
+                className="w-full py-2 rounded-xl text-xs font-bold text-white disabled:opacity-40"
+                style={{backgroundColor:PRIMARY}}>+ Agregar plantilla</button>
+            </div>
+
             {/* System prompt editor */}
             <div className="mt-5 pt-5 border-t border-gray-100">
               <p className="text-xs font-bold text-gray-700 mb-2">Personalidad de Sofia</p>
@@ -623,7 +717,7 @@ export default function Home() {
                   const activa = seleccionada === conv.telefono;
                   const temp = getTemp(calcularScore(conv));
                   return (
-                    <div key={conv.telefono} onClick={()=>abrirChat(conv.telefono)}
+                    <div key={conv.telefono} onClick={()=>abrirChatConLimpiarBadge(conv.telefono)}
                       className="p-3 border-b border-gray-50 cursor-pointer transition hover:bg-gray-50"
                       style={activa ? {backgroundColor:PRIMARY_LIGHT,borderLeft:`3px solid ${PRIMARY}`} : {}}>
                       <div className="flex items-start gap-2.5">
@@ -772,6 +866,30 @@ export default function Home() {
                         )}
                       </div>
 
+                      {/* Plantillas */}
+                      {plantillas.length > 0 && (
+                        <div className="relative">
+                          <button onClick={()=>setShowPlantillas(!showPlantillas)}
+                            className="w-9 h-9 rounded-full flex items-center justify-center text-sm hover:bg-gray-100 transition flex-shrink-0 font-bold"
+                            style={{color:PRIMARY}} title="Plantillas de respuesta">
+                            ⚡
+                          </button>
+                          {showPlantillas && (
+                            <div className="absolute bottom-12 left-0 bg-white rounded-2xl shadow-2xl border border-gray-100 z-20 overflow-hidden" style={{width:"260px"}}>
+                              <p className="text-xs font-bold text-gray-500 px-3 pt-3 pb-2">Plantillas rápidas</p>
+                              {plantillas.map(p => (
+                                <button key={p.id}
+                                  onClick={()=>{ setTexto(p.texto); setShowPlantillas(false); inputRef.current?.focus(); }}
+                                  className="w-full text-left px-3 py-2.5 hover:bg-gray-50 transition border-t border-gray-50">
+                                  <p className="text-xs font-semibold text-gray-800">{p.titulo}</p>
+                                  <p className="text-xs text-gray-400 truncate mt-0.5">{p.texto}</p>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {/* File attach */}
                       <input ref={fileRef} type="file" className="hidden"
                         accept="image/*,application/pdf,.docx,.doc,.txt,.webp"
@@ -846,7 +964,7 @@ export default function Home() {
                         return (
                           <div key={conv.telefono} draggable onDragStart={e=>handleDragStart(e,conv.telefono)}
                             className="bg-white rounded-xl p-3 shadow-sm cursor-grab active:cursor-grabbing hover:shadow-md transition select-none"
-                            onClick={()=>{setVista("lista");abrirChat(conv.telefono);}}>
+                            onClick={()=>{setVista("lista");abrirChatConLimpiarBadge(conv.telefono);}}>
                             <div className="flex items-center gap-2 mb-1.5">
                               <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{backgroundColor:PRIMARY}}>
                                 {getInitial(conv.nombre,conv.telefono)}
@@ -928,7 +1046,7 @@ export default function Home() {
                   const score=calcularScore(conv);const temp=getTemp(score);
                   return(
                     <div key={conv.telefono} className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-gray-50 cursor-pointer transition"
-                      onClick={()=>{setVista("lista");abrirChat(conv.telefono);}}>
+                      onClick={()=>{setVista("lista");abrirChatConLimpiarBadge(conv.telefono);}}>
                       <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{backgroundColor:PRIMARY}}>
                         {getInitial(conv.nombre,conv.telefono)}
                       </div>
@@ -953,7 +1071,7 @@ export default function Home() {
                 <div className="space-y-2">
                   {conversaciones.filter(c=>c.cobro_pendiente).map(conv=>(
                     <div key={conv.telefono} className="flex items-center gap-3 p-2.5 bg-white rounded-xl cursor-pointer hover:shadow-sm transition"
-                      onClick={()=>{setVista("lista");abrirChat(conv.telefono);}}>
+                      onClick={()=>{setVista("lista");abrirChatConLimpiarBadge(conv.telefono);}}>
                       <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold" style={{backgroundColor:"#dc2626"}}>
                         {getInitial(conv.nombre,conv.telefono)}
                       </div>
