@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 const SOFIA_URL = process.env.NEXT_PUBLIC_SOFIA_URL || "https://whatsapp-agentkit-production-6718.up.railway.app";
 
@@ -12,20 +12,91 @@ const ETAPA_LABELS: Record<string, string> = {
   seguimiento: "Seguimiento",
   cerrado: "Cerrado",
 };
-const ETAPA_COLORS: Record<string, string> = {
-  nuevo: "bg-gray-100 text-gray-700",
-  respondio: "bg-blue-100 text-blue-700",
-  interesado: "bg-yellow-100 text-yellow-700",
-  presupuesto: "bg-orange-100 text-orange-700",
-  seguimiento: "bg-purple-100 text-purple-700",
-  cerrado: "bg-green-100 text-green-700",
+const ETAPA_COLORS: Record<string, { bg: string; text: string; dot: string; border: string }> = {
+  nuevo:       { bg: "bg-gray-100",    text: "text-gray-600",   dot: "bg-gray-400",    border: "border-gray-300" },
+  respondio:   { bg: "bg-blue-50",     text: "text-blue-600",   dot: "bg-blue-400",    border: "border-blue-300" },
+  interesado:  { bg: "bg-yellow-50",   text: "text-yellow-700", dot: "bg-yellow-400",  border: "border-yellow-300" },
+  presupuesto: { bg: "bg-orange-50",   text: "text-orange-600", dot: "bg-orange-400",  border: "border-orange-300" },
+  seguimiento: { bg: "bg-purple-50",   text: "text-purple-600", dot: "bg-purple-400",  border: "border-purple-300" },
+  cerrado:     { bg: "bg-emerald-50",  text: "text-emerald-600",dot: "bg-emerald-400", border: "border-emerald-300" },
 };
+
+const PRIMARY = "#2e785f";
+const PRIMARY_DARK = "#235e49";
+const PRIMARY_LIGHT = "#e8f4f0";
+
+function formatTel(tel: string) {
+  if (!tel) return "Sin número";
+  const digits = tel.replace(/\D/g, "");
+  if (digits.length >= 10) {
+    return `+${digits.slice(0, 2)} ${digits.slice(2, 5)} ${digits.slice(5, 8)}-${digits.slice(8)}`;
+  }
+  return tel;
+}
+
+function getInitial(nombre: string, telefono: string) {
+  if (nombre && nombre !== telefono && nombre.length > 0 && isNaN(Number(nombre[0]))) {
+    return nombre[0].toUpperCase();
+  }
+  return "?";
+}
+
+function getDisplayName(nombre: string, telefono: string) {
+  if (!nombre || nombre === telefono || !isNaN(Number(nombre))) {
+    return formatTel(telefono);
+  }
+  return nombre;
+}
+
+function calcularScore(conv: Conversacion): number {
+  const etapaScore: Record<string, number> = {
+    nuevo: 10, respondio: 25, interesado: 50,
+    presupuesto: 70, seguimiento: 85, cerrado: 100,
+  };
+  let score = etapaScore[conv.etapa] ?? 10;
+  if (conv.derivada) score = Math.min(score + 5, 100);
+  if (conv.cobro_pendiente) score = Math.max(score - 8, 0);
+  return score;
+}
+
+function getTemperatura(score: number): { label: string; emoji: string; color: string } {
+  if (score >= 65) return { label: "Caliente", emoji: "🔥", color: "#ef4444" };
+  if (score >= 35) return { label: "Tibio",    emoji: "🌡️", color: "#f97316" };
+  return                  { label: "Frío",     emoji: "❄️", color: "#60a5fa" };
+}
+
+function exportarCSV(conversaciones: Conversacion[]) {
+  const headers = ["Nombre", "Teléfono", "Etapa", "Score", "Derivada", "Cobro Pendiente", "Monto", "Resumen", "Último Mensaje"];
+  const rows = conversaciones.map(c => [
+    getDisplayName(c.nombre, c.telefono),
+    c.telefono,
+    ETAPA_LABELS[c.etapa] || c.etapa,
+    calcularScore(c),
+    c.derivada ? "Sí" : "No",
+    c.cobro_pendiente ? "Sí" : "No",
+    c.monto_cobro || "",
+    c.resumen || "",
+    (c.ultimo_mensaje || "").replace(/,/g, ";"),
+  ]);
+  const csv = [headers, ...rows].map(r => r.join(",")).join("\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `hefe-crm-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 interface Conversacion {
   telefono: string;
   nombre: string;
   etapa: string;
   derivada: boolean;
+  cobro_pendiente: boolean;
+  monto_cobro: string;
+  resumen: string;
+  contacto_existente: boolean;
   actualizado: string;
   ultimo_mensaje: string;
   ultimo_rol: string;
@@ -42,11 +113,15 @@ export default function Home() {
   const [conversaciones, setConversaciones] = useState<Conversacion[]>([]);
   const [seleccionada, setSeleccionada] = useState<string | null>(null);
   const [historial, setHistorial] = useState<Mensaje[]>([]);
-  const [vista, setVista] = useState<"lista" | "pipeline">("lista");
+  const [vista, setVista] = useState<"lista" | "pipeline" | "dashboard">("lista");
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
   const [mensajeManual, setMensajeManual] = useState("");
   const [enviando, setEnviando] = useState(false);
+  const [busqueda, setBusqueda] = useState("");
+  const [sincronizando, setSincronizando] = useState(false);
+  const [dragOver, setDragOver] = useState<string | null>(null);
+  const chatRef = useRef<HTMLDivElement>(null);
 
   async function login() {
     setCargando(true);
@@ -76,7 +151,7 @@ export default function Home() {
     setSeleccionada(telefono);
     const res = await fetch(`${SOFIA_URL}/api/conversaciones/${telefono}?x_password=${password}`);
     const data = await res.json();
-    setHistorial(data.mensajes);
+    setHistorial(data.mensajes || []);
   }
 
   async function enviarMensaje() {
@@ -97,7 +172,42 @@ export default function Home() {
 
   async function cambiarEtapa(telefono: string, etapa: string) {
     await fetch(`${SOFIA_URL}/api/conversaciones/${telefono}/etapa?x_password=${password}&etapa=${etapa}`, { method: "PUT" });
-    await cargarConversaciones();
+    setConversaciones(prev => prev.map(c => c.telefono === telefono ? { ...c, etapa } : c));
+  }
+
+  async function sincronizar() {
+    setSincronizando(true);
+    try {
+      await fetch(`${SOFIA_URL}/sincronizar?x_password=${password}`, { method: "POST" });
+      // Poll until done
+      let done = false;
+      for (let i = 0; i < 60 && !done; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        const r = await fetch(`${SOFIA_URL}/sincronizar/estado?x_password=${password}`);
+        const d = await r.json();
+        if (!d.corriendo) done = true;
+      }
+      await cargarConversaciones();
+    } finally {
+      setSincronizando(false);
+    }
+  }
+
+  // Drag & drop handlers for Kanban
+  function handleDragStart(e: React.DragEvent, telefono: string) {
+    e.dataTransfer.setData("telefono", telefono);
+  }
+
+  function handleDragOver(e: React.DragEvent, etapa: string) {
+    e.preventDefault();
+    setDragOver(etapa);
+  }
+
+  function handleDrop(e: React.DragEvent, etapa: string) {
+    e.preventDefault();
+    setDragOver(null);
+    const telefono = e.dataTransfer.getData("telefono");
+    if (telefono) cambiarEtapa(telefono, etapa);
   }
 
   useEffect(() => {
@@ -107,174 +217,525 @@ export default function Home() {
     }
   }, [autenticado, password]);
 
+  useEffect(() => {
+    if (chatRef.current) {
+      chatRef.current.scrollTop = chatRef.current.scrollHeight;
+    }
+  }, [historial]);
+
+  const convFiltradas = conversaciones.filter(c => {
+    const nombre = getDisplayName(c.nombre, c.telefono).toLowerCase();
+    return nombre.includes(busqueda.toLowerCase()) || c.telefono.includes(busqueda);
+  });
+
+  const convSeleccionada = conversaciones.find(c => c.telefono === seleccionada);
+
+  // Dashboard stats
+  const stats = {
+    total: conversaciones.length,
+    derivados: conversaciones.filter(c => c.derivada).length,
+    cobroPendiente: conversaciones.filter(c => c.cobro_pendiente).length,
+    calientes: conversaciones.filter(c => calcularScore(c) >= 65).length,
+    porEtapa: ETAPAS.map(e => ({ etapa: e, count: conversaciones.filter(c => c.etapa === e).length })),
+  };
+
+  // LOGIN
   if (!autenticado) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="bg-white rounded-2xl shadow-lg p-8 w-full max-w-sm">
-          <div className="text-center mb-6">
-            <div className="text-4xl mb-2">👕</div>
-            <h1 className="text-2xl font-bold text-gray-800">HeFe Uniformes</h1>
-            <p className="text-gray-500 text-sm mt-1">Panel de Sofia</p>
+      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: PRIMARY_LIGHT }}>
+        <div className="bg-white rounded-3xl shadow-xl p-8 w-full max-w-sm">
+          <div className="text-center mb-8">
+            <img src="/logo.jpg" alt="HeFe Uniformes" className="w-20 h-20 rounded-full object-cover mx-auto mb-4 shadow-md" />
+            <h1 className="text-2xl font-black text-gray-800">HeFe Uniformes</h1>
+            <p className="text-sm mt-1" style={{ color: PRIMARY }}>Panel de Sofia ✨</p>
           </div>
-          <input
-            type="password"
-            placeholder="Contraseña"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && login()}
-            className="w-full border border-gray-200 rounded-xl px-4 py-3 mb-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          {error && <p className="text-red-500 text-sm mb-3">{error}</p>}
-          <button
-            onClick={login}
-            disabled={cargando}
-            className="w-full bg-blue-600 text-white rounded-xl py-3 font-semibold hover:bg-blue-700 transition disabled:opacity-50"
-          >
-            {cargando ? "Entrando..." : "Entrar"}
-          </button>
+          <div className="space-y-3">
+            <input
+              type="password"
+              placeholder="Contraseña"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && login()}
+              className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 transition"
+            />
+            {error && <p className="text-red-500 text-sm">{error}</p>}
+            <button
+              onClick={login}
+              disabled={cargando}
+              className="w-full text-white rounded-xl py-3 font-bold text-sm transition hover:opacity-90 disabled:opacity-50"
+              style={{ backgroundColor: PRIMARY }}
+            >
+              {cargando ? "Entrando..." : "Entrar"}
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <header className="bg-white border-b px-6 py-4 flex items-center justify-between">
+    <div className="min-h-screen flex flex-col bg-gray-50">
+
+      {/* HEADER */}
+      <header className="bg-white border-b border-gray-100 px-5 py-3 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-3">
-          <span className="text-2xl">👕</span>
+          <img src="/logo.jpg" alt="HeFe Uniformes" className="w-9 h-9 rounded-full object-cover shadow-sm" />
           <div>
-            <h1 className="font-bold text-gray-800">HeFe Uniformes</h1>
-            <p className="text-xs text-gray-500">Panel de Sofia</p>
+            <h1 className="font-black text-gray-800 text-sm leading-tight">HeFe Uniformes</h1>
+            <p className="text-xs leading-tight" style={{ color: PRIMARY }}>Panel de Sofia</p>
           </div>
         </div>
-        <div className="flex gap-2">
+
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 mr-1">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-xs text-gray-400">Sofia activa</span>
+          </div>
+
+          {/* Vistas */}
+          {(["lista", "pipeline", "dashboard"] as const).map(v => (
+            <button
+              key={v}
+              onClick={() => setVista(v)}
+              className="px-3 py-2 rounded-lg text-xs font-semibold transition"
+              style={vista === v ? { backgroundColor: PRIMARY, color: "white" } : { backgroundColor: "#f3f4f6", color: "#4b5563" }}
+            >
+              {v === "lista" ? "💬 Chats" : v === "pipeline" ? "📋 Kanban" : "📈 Dashboard"}
+            </button>
+          ))}
+
+          {/* Export CSV */}
           <button
-            onClick={() => setVista("lista")}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition ${vista === "lista" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+            onClick={() => exportarCSV(conversaciones)}
+            className="px-3 py-2 rounded-lg text-xs font-semibold bg-gray-100 text-gray-600 hover:bg-gray-200 transition"
+            title="Exportar CSV"
           >
-            Conversaciones
+            ⬇ CSV
           </button>
+
+          {/* Sync */}
           <button
-            onClick={() => setVista("pipeline")}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition ${vista === "pipeline" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+            onClick={sincronizar}
+            disabled={sincronizando}
+            className="px-3 py-2 rounded-lg text-xs font-semibold transition disabled:opacity-50"
+            style={{ backgroundColor: sincronizando ? "#d1d5db" : PRIMARY_LIGHT, color: PRIMARY }}
           >
-            Pipeline
+            {sincronizando ? "⟳ Sync..." : "⟳ Sync"}
           </button>
         </div>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {vista === "lista" ? (
-          <>
-            <div className="w-80 bg-white border-r overflow-y-auto flex-shrink-0">
-              <div className="p-4 border-b">
-                <p className="text-sm text-gray-500">{conversaciones.length} conversaciones</p>
-              </div>
-              {conversaciones.length === 0 ? (
-                <div className="p-8 text-center text-gray-400">
-                  <p className="text-4xl mb-2">💬</p>
-                  <p className="text-sm">Sin conversaciones todavía</p>
-                </div>
-              ) : (
-                conversaciones.map(conv => (
-                  <div
-                    key={conv.telefono}
-                    onClick={() => abrirChat(conv.telefono)}
-                    className={`p-4 border-b cursor-pointer hover:bg-gray-50 transition ${seleccionada === conv.telefono ? "bg-blue-50 border-l-4 border-l-blue-500" : ""}`}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-medium text-gray-800 text-sm">{conv.nombre}</span>
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${ETAPA_COLORS[conv.etapa] || "bg-gray-100"}`}>
-                        {ETAPA_LABELS[conv.etapa] || conv.etapa}
-                      </span>
-                    </div>
-                    <p className="text-xs text-gray-500 truncate">{conv.ultimo_mensaje || "Sin mensajes"}</p>
-                    {conv.derivada && <p className="text-xs text-orange-500 mt-1">⚡ Derivado a equipo</p>}
-                  </div>
-                ))
-              )}
-            </div>
 
-            <div className="flex-1 flex flex-col">
-              {seleccionada ? (
-                <>
-                  <div className="bg-white border-b px-6 py-3 flex items-center justify-between">
-                    <div>
-                      <p className="font-medium text-gray-800">{conversaciones.find(c => c.telefono === seleccionada)?.nombre}</p>
-                      <p className="text-xs text-gray-500">{seleccionada}</p>
-                    </div>
-                    <select
-                      value={conversaciones.find(c => c.telefono === seleccionada)?.etapa || "nuevo"}
-                      onChange={e => cambiarEtapa(seleccionada, e.target.value)}
-                      className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none"
-                    >
-                      {ETAPAS.map(e => <option key={e} value={e}>{ETAPA_LABELS[e]}</option>)}
-                    </select>
+        {/* ===== VISTA LISTA (CHATS) ===== */}
+        {vista === "lista" && (
+          <>
+            {/* SIDEBAR */}
+            <div className="w-72 bg-white border-r border-gray-100 flex flex-col flex-shrink-0">
+              <div className="p-3 border-b border-gray-100">
+                <input
+                  type="text"
+                  placeholder="Buscar cliente..."
+                  value={busqueda}
+                  onChange={e => setBusqueda(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-100 rounded-xl px-3 py-2 text-xs focus:outline-none"
+                />
+                <p className="text-xs text-gray-400 mt-2 px-1">{convFiltradas.length} conversaciones</p>
+              </div>
+              <div className="overflow-y-auto flex-1">
+                {convFiltradas.length === 0 ? (
+                  <div className="p-8 text-center text-gray-400">
+                    <p className="text-3xl mb-2">💬</p>
+                    <p className="text-xs">Sin conversaciones</p>
                   </div>
-                  <div className="flex-1 overflow-y-auto p-6 space-y-3">
-                    {historial.map((msg, i) => (
-                      <div key={i} className={`flex ${msg.role === "user" ? "justify-start" : "justify-end"}`}>
-                        <div className={`max-w-xs lg:max-w-md px-4 py-2 rounded-2xl text-sm ${msg.role === "user" ? "bg-white border text-gray-800" : "bg-blue-600 text-white"}`}>
-                          {msg.content}
+                ) : (
+                  convFiltradas.map(conv => {
+                    const etapa = ETAPA_COLORS[conv.etapa] || ETAPA_COLORS.nuevo;
+                    const nombre = getDisplayName(conv.nombre, conv.telefono);
+                    const inicial = getInitial(conv.nombre, conv.telefono);
+                    const activa = seleccionada === conv.telefono;
+                    const score = calcularScore(conv);
+                    const temp = getTemperatura(score);
+                    return (
+                      <div
+                        key={conv.telefono}
+                        onClick={() => abrirChat(conv.telefono)}
+                        className="p-3 border-b border-gray-50 cursor-pointer transition hover:bg-gray-50"
+                        style={activa ? { backgroundColor: PRIMARY_LIGHT, borderLeft: `3px solid ${PRIMARY}` } : {}}
+                      >
+                        <div className="flex items-start gap-2.5">
+                          <div
+                            className="w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0"
+                            style={{ backgroundColor: activa ? PRIMARY : "#94a3b8" }}
+                          >
+                            {inicial}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between mb-0.5">
+                              <span className="font-semibold text-gray-800 text-xs truncate">{nombre}</span>
+                              <span className="text-xs ml-1 flex-shrink-0" title={temp.label}>{temp.emoji}</span>
+                            </div>
+                            <div className="flex items-center gap-1 mb-0.5">
+                              <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${etapa.bg} ${etapa.text}`}>
+                                {ETAPA_LABELS[conv.etapa] || conv.etapa}
+                              </span>
+                              {conv.cobro_pendiente && (
+                                <span className="text-xs px-1.5 py-0.5 rounded-full font-medium bg-red-50 text-red-500">
+                                  💰 Cobro
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-gray-400 truncate">{conv.ultimo_mensaje || "Sin mensajes"}</p>
+                            {conv.derivada && (
+                              <p className="text-xs font-medium mt-0.5" style={{ color: "#f97316" }}>⚡ Con equipo</p>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    ))}
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            {/* CHAT PANEL */}
+            <div className="flex-1 flex flex-col">
+              {seleccionada && convSeleccionada ? (
+                <>
+                  {/* Chat header */}
+                  <div className="bg-white border-b border-gray-100 px-5 py-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div
+                          className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold"
+                          style={{ backgroundColor: PRIMARY }}
+                        >
+                          {getInitial(convSeleccionada.nombre, convSeleccionada.telefono)}
+                        </div>
+                        <div>
+                          <p className="font-bold text-gray-800 text-sm">{getDisplayName(convSeleccionada.nombre, convSeleccionada.telefono)}</p>
+                          <p className="text-xs text-gray-400">{convSeleccionada.telefono}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {/* Score badge */}
+                        {(() => {
+                          const score = calcularScore(convSeleccionada);
+                          const temp = getTemperatura(score);
+                          return (
+                            <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-50 text-xs font-semibold" style={{ color: temp.color }}>
+                              {temp.emoji} {score}/100
+                            </div>
+                          );
+                        })()}
+                        {convSeleccionada.cobro_pendiente && (
+                          <span className="text-xs px-2 py-1 rounded-lg bg-red-50 text-red-500 font-semibold">
+                            💰 {convSeleccionada.monto_cobro || "Cobro pendiente"}
+                          </span>
+                        )}
+                        <select
+                          value={convSeleccionada.etapa || "nuevo"}
+                          onChange={e => cambiarEtapa(seleccionada, e.target.value)}
+                          className="border border-gray-200 rounded-xl px-3 py-1.5 text-xs font-semibold focus:outline-none cursor-pointer"
+                          style={{ color: PRIMARY }}
+                        >
+                          {ETAPAS.map(e => <option key={e} value={e}>{ETAPA_LABELS[e]}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    {/* Resumen */}
+                    {convSeleccionada.resumen && (
+                      <p className="text-xs text-gray-500 mt-2 bg-gray-50 rounded-lg px-3 py-1.5 italic">
+                        💡 {convSeleccionada.resumen}
+                      </p>
+                    )}
                   </div>
-                  <div className="bg-white border-t px-4 py-3 flex gap-2">
+
+                  {/* Messages */}
+                  <div ref={chatRef} className="flex-1 overflow-y-auto p-5 space-y-2.5" style={{ backgroundColor: "#f0f4f3" }}>
+                    {historial.length === 0 ? (
+                      <div className="flex items-center justify-center h-full text-gray-400 text-sm">Sin mensajes todavía</div>
+                    ) : (
+                      historial.map((msg, i) => {
+                        const esUser = msg.role === "user";
+                        const content = msg.content;
+                        const docMatch = content.match(/^\[Documento: (.+?)\]\((.+?)\)$/);
+                        const esImagen = content.startsWith("[Imagen");
+                        const esAudio = content.startsWith("[Audio");
+                        const esVideo = content.startsWith("[Video");
+                        const esSticker = content.startsWith("[Sticker");
+
+                        return (
+                          <div key={i} className={`flex ${esUser ? "justify-start" : "justify-end"}`}>
+                            <div
+                              className="max-w-xs lg:max-w-md px-4 py-2.5 rounded-2xl text-sm shadow-sm"
+                              style={esUser
+                                ? { backgroundColor: "white", color: "#1f2937" }
+                                : { backgroundColor: PRIMARY, color: "white" }
+                              }
+                            >
+                              {docMatch ? (
+                                <a
+                                  href={docMatch[2]}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="flex items-center gap-2 hover:underline"
+                                  style={{ color: esUser ? PRIMARY : "white" }}
+                                >
+                                  <span className="text-lg">📄</span>
+                                  <span className="font-medium">{docMatch[1]}</span>
+                                  <span className="text-xs opacity-70">↗</span>
+                                </a>
+                              ) : esImagen ? (
+                                <span className="flex items-center gap-1">🖼️ {content.replace(/\[Imagen\]?:?\s?/g, "").replace("]", "").trim() || "Imagen"}</span>
+                              ) : esAudio ? (
+                                <span className="flex items-center gap-1">🎙️ Audio</span>
+                              ) : esVideo ? (
+                                <span className="flex items-center gap-1">🎥 {content.replace(/\[Video\]?:?\s?/g, "").replace("]", "").trim() || "Video"}</span>
+                              ) : esSticker ? (
+                                <span>😊 Sticker</span>
+                              ) : (
+                                <span style={{ whiteSpace: "pre-wrap" }}>{content}</span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  {/* Input */}
+                  <div className="bg-white border-t border-gray-100 px-4 py-3 flex gap-2">
                     <input
                       type="text"
                       value={mensajeManual}
                       onChange={e => setMensajeManual(e.target.value)}
                       onKeyDown={e => e.key === "Enter" && !e.shiftKey && enviarMensaje()}
                       placeholder="Escribí un mensaje como Fedra..."
-                      className="flex-1 border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="flex-1 border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none"
                     />
                     <button
                       onClick={enviarMensaje}
                       disabled={enviando || !mensajeManual.trim()}
-                      className="px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 transition disabled:opacity-50"
+                      className="px-5 py-2 text-white rounded-xl text-sm font-bold transition hover:opacity-90 disabled:opacity-40"
+                      style={{ backgroundColor: PRIMARY }}
                     >
                       {enviando ? "..." : "Enviar"}
                     </button>
                   </div>
                 </>
               ) : (
-                <div className="flex-1 flex items-center justify-center text-gray-400">
-                  <div className="text-center">
-                    <p className="text-4xl mb-2">💬</p>
-                    <p>Seleccioná una conversación</p>
+                <div className="flex-1 flex items-center justify-center" style={{ backgroundColor: "#f0f4f3" }}>
+                  <div className="text-center text-gray-400">
+                    <img src="/logo.jpg" alt="HeFe" className="w-16 h-16 rounded-full object-cover mx-auto mb-4 opacity-40" />
+                    <p className="text-sm">Seleccioná una conversación</p>
                   </div>
                 </div>
               )}
             </div>
           </>
-        ) : (
-          <div className="flex-1 overflow-x-auto p-6">
+        )}
+
+        {/* ===== VISTA KANBAN (PIPELINE) ===== */}
+        {vista === "pipeline" && (
+          <div className="flex-1 overflow-x-auto p-5">
+            <p className="text-xs text-gray-400 mb-3">Arrastrá las tarjetas entre columnas para cambiar la etapa</p>
             <div className="flex gap-4 min-w-max">
               {ETAPAS.map(etapa => {
                 const contactos = conversaciones.filter(c => c.etapa === etapa);
+                const col = ETAPA_COLORS[etapa];
+                const isDragTarget = dragOver === etapa;
                 return (
-                  <div key={etapa} className="w-64 flex-shrink-0">
-                    <div className={`rounded-t-xl px-4 py-2 font-semibold text-sm ${ETAPA_COLORS[etapa]}`}>
-                      {ETAPA_LABELS[etapa]} ({contactos.length})
+                  <div
+                    key={etapa}
+                    className="w-60 flex-shrink-0 flex flex-col"
+                    onDragOver={e => handleDragOver(e, etapa)}
+                    onDragLeave={() => setDragOver(null)}
+                    onDrop={e => handleDrop(e, etapa)}
+                  >
+                    {/* Column header */}
+                    <div className={`rounded-t-xl px-3 py-2.5 flex items-center justify-between ${col.bg} border-b-2 ${col.border}`}>
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full ${col.dot}`} />
+                        <span className={`font-bold text-xs ${col.text}`}>{ETAPA_LABELS[etapa]}</span>
+                      </div>
+                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full bg-white/70 ${col.text}`}>{contactos.length}</span>
                     </div>
-                    <div className="bg-gray-100 rounded-b-xl p-2 space-y-2 min-h-32">
-                      {contactos.map(conv => (
-                        <div
-                          key={conv.telefono}
-                          className="bg-white rounded-xl p-3 shadow-sm cursor-pointer hover:shadow-md transition"
-                          onClick={() => { setVista("lista"); abrirChat(conv.telefono); }}
-                        >
-                          <p className="font-medium text-sm text-gray-800">{conv.nombre}</p>
-                          <p className="text-xs text-gray-500 truncate mt-1">{conv.ultimo_mensaje}</p>
-                          {conv.derivada && <p className="text-xs text-orange-500 mt-1">⚡ Con equipo</p>}
+
+                    {/* Column body */}
+                    <div
+                      className={`rounded-b-xl p-2 space-y-2 flex-1 min-h-40 transition-colors ${isDragTarget ? "bg-gray-200 ring-2 ring-offset-1" : "bg-gray-100"}`}
+                      style={isDragTarget ? { ringColor: PRIMARY } : {}}
+                    >
+                      {contactos.map(conv => {
+                        const score = calcularScore(conv);
+                        const temp = getTemperatura(score);
+                        return (
+                          <div
+                            key={conv.telefono}
+                            draggable
+                            onDragStart={e => handleDragStart(e, conv.telefono)}
+                            className="bg-white rounded-xl p-3 shadow-sm cursor-grab active:cursor-grabbing hover:shadow-md transition select-none"
+                            onClick={() => { setVista("lista"); abrirChat(conv.telefono); }}
+                          >
+                            <div className="flex items-center gap-2 mb-1.5">
+                              <div
+                                className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0"
+                                style={{ backgroundColor: PRIMARY }}
+                              >
+                                {getInitial(conv.nombre, conv.telefono)}
+                              </div>
+                              <p className="font-semibold text-xs text-gray-800 truncate flex-1">{getDisplayName(conv.nombre, conv.telefono)}</p>
+                              <span className="text-xs" title={temp.label}>{temp.emoji}</span>
+                            </div>
+
+                            {/* Score bar */}
+                            <div className="mb-2">
+                              <div className="flex justify-between text-xs text-gray-400 mb-0.5">
+                                <span>Score</span>
+                                <span className="font-semibold" style={{ color: temp.color }}>{score}/100</span>
+                              </div>
+                              <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                <div
+                                  className="h-full rounded-full transition-all"
+                                  style={{ width: `${score}%`, backgroundColor: temp.color }}
+                                />
+                              </div>
+                            </div>
+
+                            {conv.resumen && (
+                              <p className="text-xs text-gray-400 truncate italic mb-1">{conv.resumen}</p>
+                            )}
+                            {conv.cobro_pendiente && (
+                              <p className="text-xs font-medium text-red-500">💰 {conv.monto_cobro || "Cobro pendiente"}</p>
+                            )}
+                            {conv.derivada && (
+                              <p className="text-xs mt-0.5" style={{ color: "#f97316" }}>⚡ Con equipo</p>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {contactos.length === 0 && (
+                        <div className={`text-center py-6 text-xs text-gray-400 rounded-lg border-2 border-dashed ${isDragTarget ? "border-gray-400 bg-gray-100" : "border-gray-200"}`}>
+                          {isDragTarget ? "Soltar aquí" : "Sin contactos"}
                         </div>
-                      ))}
+                      )}
                     </div>
                   </div>
                 );
               })}
             </div>
+          </div>
+        )}
+
+        {/* ===== VISTA DASHBOARD ===== */}
+        {vista === "dashboard" && (
+          <div className="flex-1 overflow-y-auto p-6">
+            <h2 className="text-lg font-black text-gray-800 mb-5">Dashboard</h2>
+
+            {/* KPI Cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+              {[
+                { label: "Total contactos", value: stats.total, icon: "👥", color: PRIMARY },
+                { label: "Leads calientes 🔥", value: stats.calientes, icon: "🔥", color: "#ef4444" },
+                { label: "Con equipo", value: stats.derivados, icon: "⚡", color: "#f97316" },
+                { label: "Cobro pendiente", value: stats.cobroPendiente, icon: "💰", color: "#dc2626" },
+              ].map(kpi => (
+                <div key={kpi.label} className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+                  <p className="text-2xl mb-1">{kpi.icon}</p>
+                  <p className="text-3xl font-black" style={{ color: kpi.color }}>{kpi.value}</p>
+                  <p className="text-xs text-gray-500 mt-1">{kpi.label}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Pipeline bar chart */}
+            <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100 mb-6">
+              <h3 className="font-bold text-gray-800 text-sm mb-4">Contactos por etapa</h3>
+              <div className="space-y-3">
+                {stats.porEtapa.map(({ etapa, count }) => {
+                  const col = ETAPA_COLORS[etapa];
+                  const pct = stats.total > 0 ? Math.round((count / stats.total) * 100) : 0;
+                  return (
+                    <div key={etapa} className="flex items-center gap-3">
+                      <div className="w-24 text-xs font-medium text-gray-600 text-right">{ETAPA_LABELS[etapa]}</div>
+                      <div className="flex-1 h-6 bg-gray-100 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full flex items-center px-2 transition-all ${col.dot.replace("bg-", "bg-")}`}
+                          style={{ width: `${Math.max(pct, 3)}%`, minWidth: count > 0 ? "2rem" : "0" }}
+                        >
+                          {count > 0 && <span className="text-white text-xs font-bold">{count}</span>}
+                        </div>
+                      </div>
+                      <div className="w-10 text-xs text-gray-400 text-right">{pct}%</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Hot leads */}
+            <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100 mb-6">
+              <h3 className="font-bold text-gray-800 text-sm mb-4">🔥 Leads más calientes</h3>
+              <div className="space-y-2">
+                {[...conversaciones]
+                  .sort((a, b) => calcularScore(b) - calcularScore(a))
+                  .slice(0, 8)
+                  .map(conv => {
+                    const score = calcularScore(conv);
+                    const temp = getTemperatura(score);
+                    return (
+                      <div
+                        key={conv.telefono}
+                        className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-gray-50 cursor-pointer transition"
+                        onClick={() => { setVista("lista"); abrirChat(conv.telefono); }}
+                      >
+                        <div
+                          className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0"
+                          style={{ backgroundColor: PRIMARY }}
+                        >
+                          {getInitial(conv.nombre, conv.telefono)}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-gray-800 truncate">{getDisplayName(conv.nombre, conv.telefono)}</p>
+                          <p className="text-xs text-gray-400">{ETAPA_LABELS[conv.etapa]}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="h-1.5 w-16 bg-gray-100 rounded-full overflow-hidden">
+                            <div className="h-full rounded-full" style={{ width: `${score}%`, backgroundColor: temp.color }} />
+                          </div>
+                          <span className="text-xs font-bold w-8 text-right" style={{ color: temp.color }}>{score}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+
+            {/* Cobros pendientes */}
+            {stats.cobroPendiente > 0 && (
+              <div className="bg-red-50 rounded-2xl p-5 shadow-sm border border-red-100">
+                <h3 className="font-bold text-red-700 text-sm mb-4">💰 Cobros pendientes ({stats.cobroPendiente})</h3>
+                <div className="space-y-2">
+                  {conversaciones.filter(c => c.cobro_pendiente).map(conv => (
+                    <div
+                      key={conv.telefono}
+                      className="flex items-center gap-3 p-2.5 bg-white rounded-xl cursor-pointer hover:shadow-sm transition"
+                      onClick={() => { setVista("lista"); abrirChat(conv.telefono); }}
+                    >
+                      <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold" style={{ backgroundColor: "#dc2626" }}>
+                        {getInitial(conv.nombre, conv.telefono)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-gray-800 truncate">{getDisplayName(conv.nombre, conv.telefono)}</p>
+                        <p className="text-xs text-red-500 font-medium">{conv.monto_cobro || "Monto no especificado"}</p>
+                      </div>
+                      <span className="text-xs text-gray-400">{ETAPA_LABELS[conv.etapa]}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
