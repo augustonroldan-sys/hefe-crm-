@@ -498,14 +498,21 @@ export default function Home() {
     const docMatch = content.match(/^\[Documento: (.+?)\]\((.+?)\)$/);
     // Documento sin URL: [Documento: nombre]
     const docNoUrlMatch = !docMatch ? content.match(/^\[Documento: (.+?)\]$/) : null;
-    // Imagen con URL: [Imagen](url) o [Imagen](url) caption
+    // Imagen: [Imagen](media_id_o_url)
     const imgMatch = content.match(/^\[Imagen\]\((.+?)\)(.*)?$/);
-    // Video con URL: [Video](url)
+    // Video: [Video](media_id_o_url)
     const vidMatch = content.match(/^\[Video\]\((.+?)\)(.*)?$/);
-    // Audio con media_id: [Audio](media_id)
+    // Audio: [Audio](media_id)
     const audioMatch = content.match(/^\[Audio\]\((.+?)\)$/);
+    // Extraer media_id de una URL de Whapi o usar directo
+    const toProxyUrl = (idOrUrl: string) => {
+      const id = idOrUrl.startsWith("http")
+        ? (idOrUrl.match(/\/media\/([^?/]+)/)?.[1] ?? idOrUrl)
+        : idOrUrl;
+      return `${SOFIA_URL}/api/media/${id}?x_password=${password}`;
+    };
     const esImagen = content.startsWith("[Imagen") && !imgMatch;
-    const esAudio = content.startsWith("[Audio") && !audioMatch;
+    const esAudio = content === "[voz]" || (content.startsWith("[Audio") && !audioMatch);
     const esVideo = content.startsWith("[Video") && !vidMatch;
     const esSticker = content.startsWith("[Sticker");
     const isHovered = msgHover === i;
@@ -566,8 +573,8 @@ export default function Home() {
               >
                 {imgMatch ? (
                   <div className="flex flex-col gap-1">
-                    <a href={imgMatch[1]} target="_blank" rel="noopener noreferrer">
-                      <img src={imgMatch[1]} alt="Imagen"
+                    <a href={toProxyUrl(imgMatch[1])} target="_blank" rel="noopener noreferrer">
+                      <img src={toProxyUrl(imgMatch[1])} alt="Imagen"
                         className="rounded-xl max-w-full object-cover cursor-pointer hover:opacity-90 transition"
                         style={{maxHeight:"200px", maxWidth:"240px"}}
                         onError={e => { (e.target as HTMLImageElement).style.display="none"; }}
@@ -577,7 +584,7 @@ export default function Home() {
                   </div>
                 ) : vidMatch ? (
                   <div className="flex flex-col gap-1">
-                    <a href={vidMatch[1]} target="_blank" rel="noopener noreferrer"
+                    <a href={toProxyUrl(vidMatch[1])} target="_blank" rel="noopener noreferrer"
                       className="flex items-center gap-2 px-2 py-1.5 rounded-xl hover:opacity-80 transition"
                       style={{backgroundColor: esUser ? "#f3f4f6" : "rgba(255,255,255,0.15)"}}>
                       <span className="text-2xl">🎥</span>
@@ -585,7 +592,7 @@ export default function Home() {
                     </a>
                     {vidMatch[2]?.trim() && <span className="text-xs opacity-80">{vidMatch[2].trim()}</span>}
                   </div>
-                ) : docMatch ? (
+                ) :docMatch ? (
                   <a href={docMatch[2]} target="_blank" rel="noopener noreferrer"
                     className="flex items-center gap-2 hover:underline"
                     style={{color: esUser ? PRIMARY : "white"}}>
@@ -608,7 +615,7 @@ export default function Home() {
                     </div>
                     <audio
                       controls
-                      src={`${SOFIA_URL}/api/media/${audioMatch[1]}?x_password=${password}`}
+                      src={toProxyUrl(audioMatch[1])}
                       style={{height:"32px", width:"100%"}}
                     >
                       Tu navegador no soporta audio
