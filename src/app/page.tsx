@@ -144,6 +144,10 @@ export default function Home() {
   const [sincronizando, setSincronizando] = useState(false);
   const [dragOver, setDragOver] = useState<string|null>(null);
   const [showConfig, setShowConfig] = useState(false);
+  const [showWhatsApp, setShowWhatsApp] = useState(false);
+  const [waStatus, setWaStatus] = useState<{connected?: boolean; state?: string; base64?: string; error?: string} | null>(null);
+  const [waLoading, setWaLoading] = useState(false);
+  const [waLoggingOut, setWaLoggingOut] = useState(false);
   const [delayRespuesta, setDelayRespuesta] = useState("normal");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [savingPrompt, setSavingPrompt] = useState(false);
@@ -438,6 +442,27 @@ export default function Home() {
     } finally { setResyncVozCorriendo(false); }
   }
 
+  async function fetchWaStatus() {
+    setWaLoading(true);
+    try {
+      const res = await fetch(`${SOFIA_URL}/evolution/qr?x_password=${password}`);
+      const data = await res.json();
+      // Evolution devuelve base64 como data:image/png;base64,... dentro de qrcode.base64 o base64
+      const qrBase64 = data?.qrcode?.base64 || data?.base64 || null;
+      setWaStatus({ connected: data.connected, state: data.state, base64: qrBase64, error: data.error });
+    } catch {
+      setWaStatus({ error: "No se pudo conectar con el servidor" });
+    } finally { setWaLoading(false); }
+  }
+
+  async function waLogout() {
+    setWaLoggingOut(true);
+    try {
+      await fetch(`${SOFIA_URL}/evolution/logout?x_password=${password}`, { method: "POST" });
+      await fetchWaStatus();
+    } finally { setWaLoggingOut(false); }
+  }
+
   async function cambiarEtapa(telefono: string, etapa: string) {
     await fetch(`${SOFIA_URL}/api/conversaciones/${telefono}/etapa?x_password=${password}&etapa=${etapa}`, { method: "PUT" });
     setConversaciones(prev => prev.map(c => c.telefono === telefono ? { ...c, etapa } : c));
@@ -497,6 +522,16 @@ export default function Home() {
   useEffect(() => {
     if (autenticado && vista === "dashboard") cargarStatsSofia();
   }, [autenticado, vista]); // eslint-disable-line
+
+  useEffect(() => {
+    if (!showWhatsApp) return;
+    fetchWaStatus();
+    // Auto-refresh cada 30s si no está conectado
+    const iv = setInterval(() => {
+      if (!waStatus?.connected) fetchWaStatus();
+    }, 30000);
+    return () => clearInterval(iv);
+  }, [showWhatsApp]); // eslint-disable-line
 
   // Badge en el título de la pestaña
   useEffect(() => {
@@ -816,6 +851,96 @@ export default function Home() {
   return (
     <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
 
+      {/* MODAL WHATSAPP */}
+      {showWhatsApp && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{backgroundColor:"rgba(0,0,0,0.4)"}}>
+          <div className="bg-white rounded-3xl shadow-2xl p-6 w-full max-w-xs mx-4">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="font-black text-gray-800 text-base">📱 WhatsApp</h2>
+              <button onClick={()=>setShowWhatsApp(false)} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+            </div>
+
+            {waLoading && !waStatus && (
+              <div className="flex flex-col items-center py-8 gap-3">
+                <div className="w-8 h-8 border-2 border-gray-300 border-t-transparent rounded-full animate-spin"/>
+                <p className="text-xs text-gray-400">Verificando estado...</p>
+              </div>
+            )}
+
+            {waStatus?.error && (
+              <div className="text-center py-4">
+                <p className="text-sm text-red-500 mb-3">{waStatus.error}</p>
+                <button onClick={fetchWaStatus} disabled={waLoading}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-white disabled:opacity-50"
+                  style={{backgroundColor:PRIMARY}}>
+                  Reintentar
+                </button>
+              </div>
+            )}
+
+            {waStatus && !waStatus.error && (
+              <>
+                {/* Estado */}
+                <div className="flex items-center gap-3 p-3 rounded-2xl mb-4"
+                  style={{backgroundColor: waStatus.connected ? "#f0fdf4" : "#fef9c3"}}>
+                  <div className={`w-3 h-3 rounded-full flex-shrink-0 ${waStatus.connected ? "bg-emerald-400 animate-pulse" : "bg-yellow-400"}`}/>
+                  <div>
+                    <p className="text-sm font-bold" style={{color: waStatus.connected ? "#16a34a" : "#92400e"}}>
+                      {waStatus.connected ? "Conectado" : "Desconectado"}
+                    </p>
+                    {waStatus.state && !waStatus.connected && (
+                      <p className="text-xs text-gray-400">{waStatus.state}</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* QR Code cuando no está conectado */}
+                {!waStatus.connected && (
+                  <div className="text-center mb-4">
+                    {waStatus.base64 ? (
+                      <>
+                        <p className="text-xs text-gray-500 mb-3">Escaneá el QR con WhatsApp para conectar</p>
+                        <div className="flex justify-center">
+                          <img
+                            src={waStatus.base64}
+                            alt="QR WhatsApp"
+                            className="w-48 h-48 rounded-xl border border-gray-200"
+                          />
+                        </div>
+                        <p className="text-xs text-gray-400 mt-2">Se actualiza automáticamente cada 30s</p>
+                      </>
+                    ) : (
+                      <p className="text-xs text-gray-400">QR no disponible — presioná "Actualizar"</p>
+                    )}
+                    <button onClick={fetchWaStatus} disabled={waLoading}
+                      className="mt-3 w-full py-2.5 rounded-xl text-xs font-bold disabled:opacity-50"
+                      style={{backgroundColor:PRIMARY_LIGHT, color:PRIMARY}}>
+                      {waLoading ? "Actualizando..." : "⟳ Actualizar QR"}
+                    </button>
+                  </div>
+                )}
+
+                {/* Acciones cuando está conectado */}
+                {waStatus.connected && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-gray-500 text-center mb-2">WhatsApp está activo y recibiendo mensajes</p>
+                    <button onClick={waLogout} disabled={waLoggingOut}
+                      className="w-full py-2.5 rounded-xl text-xs font-bold bg-red-50 text-red-500 hover:bg-red-100 transition disabled:opacity-50">
+                      {waLoggingOut ? "Cerrando sesión..." : "Cerrar sesión de WhatsApp"}
+                    </button>
+                    <button onClick={fetchWaStatus} disabled={waLoading}
+                      className="w-full py-2 rounded-xl text-xs font-semibold"
+                      style={{backgroundColor:PRIMARY_LIGHT, color:PRIMARY}}>
+                      {waLoading ? "..." : "⟳ Verificar estado"}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* MODAL CONFIG */}
       {showConfig && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{backgroundColor:"rgba(0,0,0,0.4)"}}>
@@ -989,6 +1114,12 @@ export default function Home() {
             className="px-3 py-2 rounded-lg text-xs font-semibold bg-gray-100 text-gray-600 hover:bg-gray-200 transition disabled:opacity-50"
             title="Re-sincronizar audios viejos [voz]">
             {resyncVozCorriendo ? "🔊 ..." : "🔊 Fix audios"}
+          </button>
+          <button onClick={()=>setShowWhatsApp(true)}
+            className="px-3 py-2 rounded-lg text-xs font-semibold transition"
+            title="Estado de WhatsApp"
+            style={{backgroundColor:PRIMARY_LIGHT, color:PRIMARY}}>
+            📱 WA
           </button>
           <button onClick={()=>setShowConfig(true)}
             className="px-3 py-2 rounded-lg text-xs font-semibold bg-gray-100 text-gray-600 hover:bg-gray-200 transition">
