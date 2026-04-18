@@ -145,9 +145,12 @@ export default function Home() {
   const [dragOver, setDragOver] = useState<string|null>(null);
   const [showConfig, setShowConfig] = useState(false);
   const [showWhatsApp, setShowWhatsApp] = useState(false);
-  const [waStatus, setWaStatus] = useState<{connected?: boolean; state?: string; base64?: string; error?: string} | null>(null);
+  const [waStatus, setWaStatus] = useState<{connected?: boolean; state?: string; base64?: string; error?: string; message?: string} | null>(null);
   const [waLoading, setWaLoading] = useState(false);
   const [waLoggingOut, setWaLoggingOut] = useState(false);
+  const [waPairingPhone, setWaPairingPhone] = useState("");
+  const [waPairingCode, setWaPairingCode] = useState<string|null>(null);
+  const [waPairingLoading, setWaPairingLoading] = useState(false);
   const [delayRespuesta, setDelayRespuesta] = useState("normal");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [savingPrompt, setSavingPrompt] = useState(false);
@@ -461,6 +464,29 @@ export default function Home() {
       await fetch(`${SOFIA_URL}/evolution/logout?x_password=${password}`, { method: "POST" });
       await fetchWaStatus();
     } finally { setWaLoggingOut(false); }
+  }
+
+  async function solicitarPairingCode() {
+    if (!waPairingPhone.trim()) return;
+    setWaPairingLoading(true);
+    setWaPairingCode(null);
+    try {
+      const res = await fetch(`${SOFIA_URL}/evolution/pairing-code?x_password=${password}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: waPairingPhone.replace(/\D/g, "") }),
+      });
+      const data = await res.json();
+      if (data.code) {
+        setWaPairingCode(data.code);
+      } else if (data.pairingCode) {
+        setWaPairingCode(data.pairingCode);
+      } else {
+        setWaPairingCode("Error: " + (data.error || data.message || JSON.stringify(data)));
+      }
+    } catch {
+      setWaPairingCode("Error de conexión");
+    } finally { setWaPairingLoading(false); }
   }
 
   async function cambiarEtapa(telefono: string, etapa: string) {
@@ -894,28 +920,55 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* QR Code cuando no está conectado */}
+                {/* QR Code / Pairing cuando no está conectado */}
                 {!waStatus.connected && (
-                  <div className="text-center mb-4">
+                  <div className="mb-4">
                     {waStatus.base64 ? (
-                      <>
+                      <div className="text-center">
                         <p className="text-xs text-gray-500 mb-3">Escaneá el QR con WhatsApp para conectar</p>
                         <div className="flex justify-center">
-                          <img
-                            src={waStatus.base64}
-                            alt="QR WhatsApp"
-                            className="w-48 h-48 rounded-xl border border-gray-200"
-                          />
+                          <img src={waStatus.base64} alt="QR WhatsApp" className="w-48 h-48 rounded-xl border border-gray-200"/>
                         </div>
                         <p className="text-xs text-gray-400 mt-2">Se actualiza automáticamente cada 30s</p>
-                      </>
+                      </div>
                     ) : (
-                      <p className="text-xs text-gray-400">QR no disponible — presioná "Actualizar"</p>
+                      <div>
+                        {/* Pairing code por número */}
+                        <p className="text-xs text-gray-500 mb-2 font-semibold">Conectar por número de teléfono</p>
+                        <p className="text-xs text-gray-400 mb-3">Ingresá el número de WhatsApp de HeFe con código de país (ej: 5491112345678)</p>
+                        <input
+                          type="tel"
+                          value={waPairingPhone}
+                          onChange={e => setWaPairingPhone(e.target.value)}
+                          placeholder="5491112345678"
+                          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm mb-2 focus:outline-none focus:border-green-400"
+                        />
+                        <button
+                          onClick={solicitarPairingCode}
+                          disabled={waPairingLoading || !waPairingPhone.trim()}
+                          className="w-full py-2.5 rounded-xl text-xs font-bold text-white disabled:opacity-50 mb-3"
+                          style={{backgroundColor: PRIMARY}}>
+                          {waPairingLoading ? "Solicitando código..." : "Obtener código de vinculación"}
+                        </button>
+                        {waPairingCode && (
+                          <div className="bg-gray-50 rounded-2xl p-4 text-center border border-gray-200">
+                            {waPairingCode.startsWith("Error") ? (
+                              <p className="text-xs text-red-500">{waPairingCode}</p>
+                            ) : (
+                              <>
+                                <p className="text-xs text-gray-500 mb-2">Ingresá este código en WhatsApp</p>
+                                <p className="text-3xl font-black tracking-widest" style={{color: PRIMARY}}>{waPairingCode}</p>
+                                <p className="text-xs text-gray-400 mt-2">WhatsApp → Dispositivos vinculados → Vincular con número</p>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     )}
                     <button onClick={fetchWaStatus} disabled={waLoading}
                       className="mt-3 w-full py-2.5 rounded-xl text-xs font-bold disabled:opacity-50"
                       style={{backgroundColor:PRIMARY_LIGHT, color:PRIMARY}}>
-                      {waLoading ? "Actualizando..." : "⟳ Actualizar QR"}
+                      {waLoading ? "Verificando..." : "⟳ Verificar conexión"}
                     </button>
                   </div>
                 )}
